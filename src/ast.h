@@ -1,6 +1,7 @@
 # ifndef AST_H
 # define AST_H
 # pragma once //只引用一次
+// todo: IR生成代码(试图输出string)
 
 # include <memory>
 # include <string>
@@ -10,17 +11,18 @@ class BaseAST {
     public:
     virtual ~BaseAST() = default;
     // Dump()是用来输出的函数
-    virtual void Dump() const = 0;
+    //virtual void Dump() const = 0;
+    virtual std::string Dump() const = 0;
 };
 
 // CompUnitAST 是 BaseAST
 class CompUnitAST: public BaseAST {
     public:
     std::unique_ptr<BaseAST> func_def;
-    void Dump() const override{
-    std::cout << "CompUnitAST { ";
-    func_def->Dump();
-    std::cout << " }";
+    std::string Dump() const override{
+    // std::cout << "CompUnitAST { ";
+    return func_def->Dump();
+    // std::cout << " }";
     };
 };
 
@@ -30,12 +32,13 @@ class FuncDefAST : public BaseAST {
   std::unique_ptr<BaseAST> func_type;
   std::string ident;
   std::unique_ptr<BaseAST> block;
-  void Dump() const override {
-    std::cout << "FuncDefAST { ";
-    func_type->Dump();
-    std::cout << ", " << ident << ", ";
-    block->Dump();
-    std::cout << " }";
+  std::string Dump() const override {
+    //std::cout << "FuncDefAST { ";
+    //func_type->Dump();
+    //std::cout << ", " << ident << ", ";
+    //block->Dump();
+    //std::cout << " }";
+    return "fun @" + ident + "(): " + func_type->Dump() + block->Dump();
   }
 };
 
@@ -43,30 +46,38 @@ class FuncDefAST : public BaseAST {
 class FuncTypeAST : public BaseAST {
     public:
     std::string func_type;
-    void Dump() const override {
-        std::cout << "FuncTypeAST {";
-        std::cout << func_type;
-        std::cout << "}";
+    std::string Dump() const override {
+        //std::cout << "FuncTypeAST {";
+        //std::cout << func_type;
+        //std::cout << "}";
+        if (func_type == "int") {return "i32";}
+        else {return "";}
     };
 };
 
 class BlockAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> stmt;
-    void Dump() const override{
-        std::cout << "BlockAST {";
-        stmt->Dump();
-        std::cout << "}";
+    std::string Dump() const override{
+        //std::cout << "BlockAST {";
+        //stmt->Dump();
+        //std::cout << "}";
+        return "{\n" + stmt->Dump() + "\n}";
     };
 };
 
 class StmtAST : public BaseAST {
     public:
+    std::string word;
     std::unique_ptr<BaseAST> number;
-    void Dump() const override {
-        std::cout << "StmtAST {";
-        number->Dump();
-        std::cout << "}";
+    std::string Dump() const override {
+        //std::cout << "StmtAST {";
+        //number->Dump();
+        //std::cout << "}";
+        std::string koopa_word;
+        if (word=="return") koopa_word = "ret ";
+        else return " ";
+        return "\%entry:\n  " + koopa_word + number->Dump();
     };
 };
 
@@ -74,10 +85,12 @@ class StmtAST : public BaseAST {
 class NumberAST : public BaseAST {
     public:
     int int_const; //这里用整数形式
-    void Dump() const override {
-        std::cout << "NumberAST {";
-        std::cout << int_const;
-        std::cout << "}";
+    std::string Dump() const override {
+        //std::cout << "NumberAST {";
+        //std::cout << int_const;
+        //std::cout << "}";
+        std::string const_str = std::to_string(int_const);
+        return const_str;
     };
 };
 

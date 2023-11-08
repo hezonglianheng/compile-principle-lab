@@ -1,7 +1,7 @@
 %code requires {
   #include <memory>
   #include <string>
-  #include "ast.h"
+  #include "ast.h"  // include的用法, 先尝试
 }
 
 %{
@@ -103,6 +103,7 @@ Block
 Stmt
   : RETURN Number ';' {
     auto ast = new StmtAST();
+    ast->word = "return";
     ast->number = unique_ptr<BaseAST>($2);
     $$ = ast;
     //auto number = unique_ptr<string>($2);

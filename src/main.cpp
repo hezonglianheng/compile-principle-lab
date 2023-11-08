@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 #include <memory>
 #include <string>
 #include "ast.h"
@@ -13,6 +14,8 @@ using namespace std;
 // 你的代码编辑器/IDE 很可能找不到这个文件, 然后会给你报错 (虽然编译不会出错)
 // 看起来会很烦人, 于是干脆采用这种看起来 dirty 但实际很有效的手段
 extern FILE *yyin;
+// 尝试使用yyout文件
+// extern FILE *yyout;
 extern int yyparse(unique_ptr<BaseAST> &ast);
 
 int main(int argc, const char *argv[]) {
@@ -26,6 +29,8 @@ int main(int argc, const char *argv[]) {
   // 打开输入文件, 并且指定 lexer 在解析的时候读取这个文件
   yyin = fopen(input, "r");
   assert(yyin);
+  // 用fstream来写字符串
+  std::ofstream out_file (output);
 
   // 调用 parser 函数, parser 函数会进一步调用 lexer 解析输入文件的
   unique_ptr<BaseAST> ast;
@@ -33,7 +38,11 @@ int main(int argc, const char *argv[]) {
   assert(!ret);
 
   // 输出解析得到的 AST, 其实就是个字符串
-  ast->Dump();
-  cout << endl;
+  //ast->Dump();
+  // ofstream to_koopa(output);
+  //cout << ast->Dump();
+  //cout << endl;
+  // 将转换得来的Koopa IR写入文件中备用
+  out_file << ast->Dump() << endl;
   return 0;
 }
