@@ -17,6 +17,8 @@ void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
 
 using namespace std;
 
+int exp_counter = 0;
+
 %}
 
 // 定义 parser 函数和错误处理函数的附加参数
@@ -38,12 +40,13 @@ using namespace std;
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 %token INT RETURN
-%token <str_val> IDENT
+// 尝试添加 str_val STR_CONST
+%token <str_val> IDENT STR_CONST
 // 试图将Number token 的类型调整为int_val, 不行, 还是要作为ast_val
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Number
+%type <ast_val> FuncDef FuncType Block Stmt Number UnaryOp Exp UnaryExp PrimaryExp
 
 %%
 
@@ -101,16 +104,63 @@ Block
   ;
 
 Stmt
-  : RETURN Number ';' {
+  : RETURN Exp ';' {
     auto ast = new StmtAST();
     ast->word = "return";
-    ast->number = unique_ptr<BaseAST>($2);
+    ast->expression = unique_ptr<BaseAST>($2);
     $$ = ast;
     //auto number = unique_ptr<string>($2);
     //$$ = new string("return " + *number + ";");
   }
   ;
 
+// 需要增加UnaryExp, PrimaryExp等符号
+Exp
+  : UnaryExp {
+    auto ast = new ExpAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+UnaryExp
+  : UnaryOp UnaryExp {
+    auto ast = new UnaryExpAST();
+    ast->unary_op = unique_ptr<BaseAST>($1);
+    ast->son_tree = unique_ptr<BaseAST>($2);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | PrimaryExp {
+    auto ast = new UnaryExpAST();
+    ast->son_tree = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  ;
+
+PrimaryExp
+  : Number {
+    auto ast = new PrimaryExpAST();
+    ast->son_tree = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | '(' Exp ')' {
+    auto ast = new PrimaryExpAST();
+    ast->son_tree = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  ;
+
+UnaryOp
+  : STR_CONST {
+    auto ast = new UnaryOpAST();
+    ast->str_const = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  ;
 
 // 接下来还请考虑是否使用Number这个种类的token
 Number

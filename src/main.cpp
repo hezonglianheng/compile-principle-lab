@@ -8,6 +8,7 @@
 #include <cstdint> // 提供int32_t类型支持的库
 #include "ast.h"
 #include "koopa.h" // 引用koopa头文件
+#include <unordered_map> // 用unordered_map类型存已经分配了的内存
 
 using namespace std;
 
@@ -21,6 +22,19 @@ extern FILE *yyin;
 // extern FILE *yyout;
 extern int yyparse(unique_ptr<BaseAST> &ast);
 
+// 尝试在此处定义exp_counter
+// 还是不要在这里定义了, 放到y文件去吧
+//int exp_counter = 0;
+// 声明0号寄存器名称
+const string ZERO_REGISTER = "x0";
+string registers[15] = {"t0", "t1", "t2", "t3", "t4", "t5", 
+"t6", "a1", "a2", "a3", "a4", "a5", "a6", "a0"};
+
+// 存放已经分配好的register和指针的关系
+unordered_map<koopa_raw_value_t, string> register_distribution;
+// 使用的register的全局计数器
+int register_counter = 0;
+
 // 声明Visit函数的用法
 string Visit(const koopa_raw_program_t &program);
 string Visit(const koopa_raw_slice_t &slice);
@@ -29,6 +43,8 @@ string Visit(const koopa_raw_basic_block_t &bb);
 string Visit(const koopa_raw_value_t &value);
 string Visit(const koopa_raw_return_t inst);
 string Visit(const koopa_raw_integer_t inst);
+// 增加声明识别二元运算符的函数
+string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value);
 
 int main(int argc, const char *argv[]) {
   // 解析命令行参数. 测试脚本/评测平台要求你的编译器能接收如下参数:
@@ -172,20 +188,49 @@ string Visit(const koopa_raw_value_t &value) {
       // 访问 integer 指令并获得返回的字符串
       get_str = Visit(kind.data.integer);
       break;
+    case KOOPA_RVT_BINARY:
+      // 11-22: 添加类型 二元运算符
+      // 访问 binary 指令并获得返回的字符串
+      get_str = Visit(kind.data.binary, value);
+      break;
+    // 这个东西可能是指针, 可能需要处理
+    //case KOOPA_RVT_GET_PTR:
+      //cout << "get a pointer!";
+      //get_str = "";
+      // break;
     default:
+      // cout << "unknown type";
       // 其他类型暂时遇不到
       assert(false);
   }
+  // 需要访问那些使用该值的值吗?这个东西怎么使用?
   return get_str;
 }
 
 string Visit(const koopa_raw_return_t inst){
-  // 确定返回值指令并访问之
+  string ret_str, get_str = "";
+  // 确定返回值指针
   koopa_raw_value_t ret_value = inst.value;
-  string ret_val_str = Visit(ret_value);
+  const auto &kind = ret_value->kind;
+  // 判断指针类型
+  switch (kind.tag)
+  {
+  case KOOPA_RVT_INTEGER:
+    ret_str = Visit(ret_value);
+    get_str += "  li   a0, " + ret_str + "\n  ret";
+    break;
+  case KOOPA_RVT_BINARY:
+    ret_str = register_distribution[ret_value];
+    get_str += "  mv   a0, " + ret_str + "\n  ret";
+    break;
+  default:
+    break;
+  }
+  return get_str;
+  // string ret_val_str = Visit(ret_value);
   // 暂时在此处实现将立即数0放入a0存储器的操作
   // 返回riscv return指令的字符串形式
-  return "  li a0, " + ret_val_str + "\n  ret";
+  // return "  li a0, " + ret_val_str + "\n  ret";
 }
 
 string Visit(const koopa_raw_integer_t inst){
@@ -195,4 +240,83 @@ string Visit(const koopa_raw_integer_t inst){
   string val_str = to_string(int_val);
   // 返回获得值的字符串形式
   return val_str;
+}
+
+
+string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
+  // 测试结果是: 左值右值作为koopa_raw_value_t(指针)有两种可能性: 
+  // 一个是具体数值指针 kind==KOOPA_RVT_INTEGER
+  // 一个是二元运算指针 kind==KOOPA_RVT_BINARY
+  // 需要判断指针相同来确定寄存器分配(大概)
+  // 需要引入指针来管理寄存器分配
+  // 设计左值 右值 本运算寄存器 结果值 
+  string left_str, right_str, reg, get_str="";
+  // 为新建的二元运算分配新的寄存器, 
+  reg = registers[register_counter];
+  // 放入对应值表中
+  register_distribution[value] = reg;
+  // 寄存器计数器+1
+  register_counter++;
+  // 获知左值右值的类型
+  const auto &left_kind = inst.lhs->kind;
+  const auto &right_kind = inst.rhs->kind;
+  // 断言: 不能出现两个整数值, 不然寄存器分不了一点
+  // 放弃断言
+  // assert(!(left_kind.tag==KOOPA_RVT_INTEGER && right_kind.tag==KOOPA_RVT_INTEGER));
+  // 检查左值
+  switch (left_kind.tag)
+  {
+  case KOOPA_RVT_INTEGER:
+  // 若为数字, 则看数字的值
+    left_str = Visit(inst.lhs);
+    if (left_str=="0") left_str = ZERO_REGISTER;
+    else {
+      // 非0左值直接放进分来的寄存器
+      get_str += "  li   " + reg + ", " + left_str;
+      left_str = reg;
+    }
+    break;
+  case KOOPA_RVT_BINARY:
+  // 若为已有的二元运算, 则要找出该二元运算用的寄存器
+    left_str = register_distribution[inst.lhs];
+    break;
+  default:
+  // 否则报错
+    assert(false);
+  }
+  // 同样的检查右值类型
+  switch (right_kind.tag)
+  {
+  case KOOPA_RVT_INTEGER:
+  // 若为数字, 则看数字的值
+    right_str = Visit(inst.rhs);
+    if (right_str=="0") right_str = ZERO_REGISTER;
+    else {
+      // 非0右值直接放进分来的寄存器
+      get_str += "  li   " + reg + ", " + right_str + "\n";
+      right_str = reg;
+    }
+    break;
+  case KOOPA_RVT_BINARY:
+  // 若为已有的二元运算, 则要找出该二元运算用的寄存器
+    right_str = register_distribution[inst.rhs];
+    break;
+  default:
+  // 否则报错
+    assert(false);
+  }
+  switch (inst.op)
+  {
+  case KOOPA_RBO_EQ:
+    get_str += "  xor  " + reg + ", " + right_str + ", " + left_str + "\n";
+    get_str += "  seqz " + reg + ", " + reg + "\n";
+    break;
+  case KOOPA_RBO_SUB:
+    get_str += "  sub  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  default:
+    cout << "unknown type!";
+    break;
+  }
+  return get_str;
 }
