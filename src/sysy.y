@@ -46,7 +46,7 @@ int exp_counter = 0;
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Number UnaryOp Exp UnaryExp PrimaryExp
+%type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp
 
 %%
 
@@ -116,13 +116,14 @@ Stmt
 
 // 需要增加UnaryExp, PrimaryExp等符号
 Exp
-  : UnaryExp {
+  : AddExp {
     auto ast = new ExpAST();
     ast->exp = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
   ;
 
+/*
 UnaryExp
   : UnaryOp UnaryExp {
     auto ast = new UnaryExpAST();
@@ -140,6 +141,113 @@ UnaryExp
     $$ = ast;
   }
   ;
+*/
+
+// 增加AddExp
+AddExp
+  : MulExp {
+    auto ast = new AddExpAST();
+    ast->mul = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | AddExp '+' MulExp {
+    auto ast = new AddExpAST();
+    ast->add = unique_ptr<BaseAST>($1);
+    ast->op = "+";
+    ast->mul = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    ast->place = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
+  | AddExp '-' MulExp {
+    auto ast = new AddExpAST();
+    ast->add = unique_ptr<BaseAST>($1);
+    ast->op = "-";
+    ast->mul = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    ast->place = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
+  ;
+
+// 增加MulExp
+MulExp
+  : UnaryExp {
+    auto ast = new MulExpAST();
+    ast->unary = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | MulExp '*' UnaryExp {
+    auto ast = new MulExpAST();
+    ast->mul = unique_ptr<BaseAST>($1);
+    ast->op = "*";
+    ast->unary = unique_ptr<BaseAST>($3);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | MulExp '/' UnaryExp {
+    auto ast = new MulExpAST();
+    ast->mul = unique_ptr<BaseAST>($1);
+    ast->op = "/";
+    ast->unary = unique_ptr<BaseAST>($3);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | MulExp '%' UnaryExp {
+    auto ast = new MulExpAST();
+    ast->mul = unique_ptr<BaseAST>($1);
+    ast->op = "%";
+    ast->unary = unique_ptr<BaseAST>($3);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+
+UnaryExp
+  : PrimaryExp {
+    auto ast = new UnaryExpAST();
+    ast->son_tree = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | '+' UnaryExp {
+    auto ast = new UnaryExpAST();
+    ast->op = "+";
+    ast->son_tree = unique_ptr<BaseAST>($2);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | '-' UnaryExp {
+    auto ast = new UnaryExpAST();
+    ast->op = "-";
+    ast->son_tree = unique_ptr<BaseAST>($2);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+
+  }
+  | '!' UnaryExp {
+    auto ast = new UnaryExpAST();
+    ast->op = "!";
+    ast->son_tree = unique_ptr<BaseAST>($2);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
 
 PrimaryExp
   : Number {
@@ -154,6 +262,7 @@ PrimaryExp
   }
   ;
 
+/*
 UnaryOp
   : STR_CONST {
     auto ast = new UnaryOpAST();
@@ -161,6 +270,7 @@ UnaryOp
     $$ = ast;
   }
   ;
+*/
 
 // 接下来还请考虑是否使用Number这个种类的token
 Number

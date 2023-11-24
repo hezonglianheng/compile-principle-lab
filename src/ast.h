@@ -85,10 +85,10 @@ class StmtAST : public BaseAST {
         //number->Dump();
         //std::cout << "}";
         std::string koopa_word;
-        if (word=="return") koopa_word = "ret ";
+        if (word=="return") koopa_word = " ret ";
         else return " ";
         // 收集两条路线的上传结果
-        return "\%entry:\n  " + expression->Dump() + "\n " + koopa_word + expression->GetUpward();
+        return "\%entry:\n" + expression->Dump() + koopa_word + expression->GetUpward();
     };
 };
 
@@ -100,17 +100,66 @@ class ExpAST : public BaseAST {
     int ast_state;
     std::string GetUpward() const override {return exp->GetUpward();}
     std::string Dump() const override {
-        if (ast_state==0) {
-            return exp->Dump();
-        }
-        else return " ";
+        return exp->Dump();
     };
+};
+
+class AddExpAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> add;
+    std::string op;
+    std::unique_ptr<BaseAST> mul;
+    int ast_state;
+    int place;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (op=="+") return add->Dump()+mul->Dump()+" %" + std::to_string(place) + " = add " + add->GetUpward() + ", " + mul->GetUpward() +"\n";
+            else if (op=="-") return add->Dump()+mul->Dump()+" %" + std::to_string(place) + " = sub " + add->GetUpward() + ", " + mul->GetUpward() +"\n";
+            else return "";
+        }
+        else if (ast_state==1) return mul->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place);
+        else if (ast_state==1) return mul->GetUpward();
+        else return "";
+    }
+};
+
+class MulExpAST :public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> mul;
+    std::string op;
+    std::unique_ptr<BaseAST> unary;
+    // 设置表达式状态
+    // 状态0为乘法表达式递归
+    // 状态1为进入一元表达式
+    int ast_state;
+    // 占用的标识符号
+    int place;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (op=="*") return mul->Dump() + unary->Dump() + " %" + std::to_string(place) + " = mul " + mul->GetUpward() + ", " + unary->GetUpward() + "\n";
+            else if (op=="/") return mul->Dump() + unary->Dump() + " %" + std::to_string(place) + " = div " + mul->GetUpward() + ", " + unary->GetUpward() + "\n";
+            else if (op=="%") return mul->Dump() + unary->Dump() + " %" + std::to_string(place) + " = mod " + mul->GetUpward() + ", "+ unary->GetUpward() + "\n";
+            else return "";
+        }
+        else if (ast_state==1) return unary->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place);
+        else if (ast_state==1) return unary->GetUpward();
+        else return "";
+    }
 };
 
 class UnaryExpAST : public BaseAST {
     public:
     // 存放一元运算符
-    std::unique_ptr<BaseAST> unary_op;
+    // std::unique_ptr<BaseAST> unary_op;
+    std::string op;
     // 存放一元表达式或者基础表达式
     std::unique_ptr<BaseAST> son_tree;
     // 设置表达式状态
@@ -124,9 +173,9 @@ class UnaryExpAST : public BaseAST {
         if (ast_state==0) {
             // return "%" + std::to_string(place);
             // 若为+则沿用之前传来的GetUpward
-            if (unary_op->GetUpward()=="+") return son_tree->GetUpward();
+            if (op=="+") return son_tree->GetUpward();
             // 若为-!则新建地址向上传
-            else if(unary_op->GetUpward()=="-"||unary_op->GetUpward()=="!") return "%" + std::to_string(place);
+            else if(op=="-"||op=="!") return "%" + std::to_string(place);
             else return "";
         }
         else if (ast_state==1) return son_tree->GetUpward();
@@ -137,10 +186,13 @@ class UnaryExpAST : public BaseAST {
             // todo: 如何调整?
             // return son_tree->Dump() + "\n " + "%" + std::to_string(place) + " = " + unary_op->Dump() + son_tree->GetUpward();
             // 若为+则保持结果字符串不动
-            if (unary_op->GetUpward()=="+") return son_tree->Dump();
+            if (op=="+") return son_tree->Dump();
             // 若为-!则添加式子
-            else if(unary_op->GetUpward()=="-"||unary_op->GetUpward()=="!") {
-                return son_tree->Dump() + "\n " + "%" + std::to_string(place) + " = " + unary_op->Dump() + son_tree->GetUpward();
+            else if(op=="-") {
+                return son_tree->Dump() + " %" + std::to_string(place) + " = sub 0, " + son_tree->GetUpward() + "\n";
+            }
+            else if (op=="!") {
+                return son_tree->Dump() + " %" + std::to_string(place) + " = eq 0, " + son_tree->GetUpward() + "\n";
             }
             else return "";
         }
@@ -166,6 +218,7 @@ class PrimaryExpAST : public BaseAST {
 };
 
 // 添加AST节点UnaryOpAST用来翻译一元运算符
+/*尝试放弃
 class UnaryOpAST : public BaseAST {
     public:
     std::string str_const;
@@ -177,6 +230,7 @@ class UnaryOpAST : public BaseAST {
         else {return "";}
     };
 };
+*/
 
 // 这个也是必要的！这里是文档的typo！助教你没有心！
 class NumberAST : public BaseAST {

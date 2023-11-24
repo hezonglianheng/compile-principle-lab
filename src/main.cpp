@@ -249,14 +249,14 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   // 一个是二元运算指针 kind==KOOPA_RVT_BINARY
   // 需要判断指针相同来确定寄存器分配(大概)
   // 需要引入指针来管理寄存器分配
-  // 设计左值 右值 本运算寄存器 结果值 
-  string left_str, right_str, reg, get_str="";
-  // 为新建的二元运算分配新的寄存器, 
-  reg = registers[register_counter];
+  // 设计左值 右值 左值寄存器 右值寄存器 本运算寄存器 结果值 
+  string left_str, right_str, left_reg, right_reg, reg, get_str="";
+  // 为新建的二元运算分配新的寄存器
+  // reg = registers[register_counter];
   // 放入对应值表中
-  register_distribution[value] = reg;
+  // register_distribution[value] = reg;
   // 寄存器计数器+1
-  register_counter++;
+  // register_counter++;
   // 获知左值右值的类型
   const auto &left_kind = inst.lhs->kind;
   const auto &right_kind = inst.rhs->kind;
@@ -272,13 +272,25 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     if (left_str=="0") left_str = ZERO_REGISTER;
     else {
       // 非0左值直接放进分来的寄存器
-      get_str += "  li   " + reg + ", " + left_str;
-      left_str = reg;
+      // get_str += "  li   " + reg + ", " + left_str;
+      // left_str = reg;
+      // 为非0左值分配一个新的寄存器
+      left_reg = registers[register_counter];
+      // 把这个非0左值放进去
+      get_str += "  li   " + left_reg + ", " + left_str + "\n";
+      // left_str更新为寄存器地址
+      left_str = left_reg;
+      reg = left_reg;
+      // 寄存器计数器+1
+      register_counter++;
+      // 将reg设为这个新分配的
     }
     break;
   case KOOPA_RVT_BINARY:
   // 若为已有的二元运算, 则要找出该二元运算用的寄存器
     left_str = register_distribution[inst.lhs];
+    // 更新reg寄存器
+    reg = left_str;
     break;
   default:
   // 否则报错
@@ -293,26 +305,48 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     if (right_str=="0") right_str = ZERO_REGISTER;
     else {
       // 非0右值直接放进分来的寄存器
-      get_str += "  li   " + reg + ", " + right_str + "\n";
-      right_str = reg;
+      // get_str += "  li   " + reg + ", " + right_str + "\n";
+      // right_str = reg;
+      // 逻辑与左值相同
+      right_reg = registers[register_counter];
+      get_str += "  li   " + right_reg + ", " + right_str + "\n";
+      right_str = right_reg;
+      reg = right_reg;
+      register_counter++;
     }
     break;
   case KOOPA_RVT_BINARY:
   // 若为已有的二元运算, 则要找出该二元运算用的寄存器
     right_str = register_distribution[inst.rhs];
+    // 更新right寄存器
+    reg = right_str;
     break;
   default:
   // 否则报错
     assert(false);
   }
+  // reg放入对应值表中
+  register_distribution[value] = reg;
   switch (inst.op)
   {
   case KOOPA_RBO_EQ:
     get_str += "  xor  " + reg + ", " + right_str + ", " + left_str + "\n";
     get_str += "  seqz " + reg + ", " + reg + "\n";
     break;
+  case KOOPA_RBO_ADD:
+    get_str += "  add  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
   case KOOPA_RBO_SUB:
     get_str += "  sub  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_MUL:
+    get_str += "  mul  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_DIV:
+    get_str += "  div  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_MOD:
+    get_str += "  rem  " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   default:
     cout << "unknown type!";

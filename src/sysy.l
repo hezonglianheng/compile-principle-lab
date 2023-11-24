@@ -17,8 +17,6 @@ MultilineComment "/*"(.|\n)*"*/"
 
 Identifier [a-zA-Z_][a-zA-Z0-9_]*
 
-UnaryOp [\+\-!]
-
 Decimal [1-9][0-9]*
 Octal 0[0-7]*
 Hexadecimal 0[xX][0-9a-fA-F]*
@@ -32,7 +30,6 @@ Hexadecimal 0[xX][0-9a-fA-F]*
 "int" {return INT;}
 "return" {return RETURN;}
 {Identifier} {yylval.str_val = new string(yytext); return IDENT;}
-{UnaryOp} {yylval.str_val = new string(yytext); return STR_CONST;}
 {Decimal} {yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Octal} {yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
 {Hexadecimal} {yylval.int_val = strtol(yytext, nullptr, 0); return INT_CONST; }
