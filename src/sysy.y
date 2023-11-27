@@ -40,13 +40,13 @@ int exp_counter = 0;
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 %token INT RETURN
-// 尝试添加 str_val STR_CONST
-%token <str_val> IDENT STR_CONST
+// 尝试添加 str_val EQ_CONST REL_CONST
+%token <str_val> IDENT EQ_CONST REL_CONST LAND_CONST LOR_CONST
 // 试图将Number token 的类型调整为int_val, 不行, 还是要作为ast_val
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp
+%type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp RelExp RelOp EqExp EqOp LAndExp LAndOp LOrExp LOrOp
 
 %%
 
@@ -116,32 +116,129 @@ Stmt
 
 // 需要增加UnaryExp, PrimaryExp等符号
 Exp
-  : AddExp {
+  : LOrExp {
     auto ast = new ExpAST();
     ast->exp = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
   ;
 
-/*
-UnaryExp
-  : UnaryOp UnaryExp {
-    auto ast = new UnaryExpAST();
-    ast->unary_op = unique_ptr<BaseAST>($1);
-    ast->son_tree = unique_ptr<BaseAST>($2);
-    ast->place = exp_counter;
-    exp_counter++;
-    ast->ast_state = 0;
-    $$ = ast;
-  }
-  | PrimaryExp {
-    auto ast = new UnaryExpAST();
-    ast->son_tree = unique_ptr<BaseAST>($1);
+LOrExp
+  : LAndExp {
+    auto ast = new LOrExpAST();
+    ast->land = unique_ptr<BaseAST>($1);
     ast->ast_state = 1;
     $$ = ast;
   }
+  | LOrExp LOrOp LAndExp {
+    auto ast = new LOrExpAST();
+    ast->lor = unique_ptr<BaseAST>($1);
+    ast->op = unique_ptr<BaseAST>($2);
+    ast->land = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    /*连续三次申请标识符*/
+    ast->place1 = exp_counter;
+    exp_counter++;
+    ast->place2 = exp_counter;
+    exp_counter++;
+    ast->place3 = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
   ;
-*/
+
+LOrOp
+  : LOR_CONST {
+    auto ast = new LOrOpAST();
+    ast->op = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  ;
+
+LAndExp
+  : EqExp {
+    auto ast = new LAndExpAST();
+    ast->eq = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | LAndExp LAndOp EqExp {
+    auto ast = new LAndExpAST();
+    ast->land = unique_ptr<BaseAST>($1);
+    ast->op = unique_ptr<BaseAST>($2);
+    ast->eq = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    /*连续三次申请标识符*/
+    ast->place1 = exp_counter;
+    exp_counter++;
+    ast->place2 = exp_counter;
+    exp_counter++;
+    ast->place3 = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
+  ;
+
+LAndOp
+  : LAND_CONST {
+    auto ast = new LAndOpAST();
+    ast->op = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  ;
+
+EqExp
+  : RelExp {
+    auto ast = new EqExpAST();
+    ast->rel = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | EqExp EqOp RelExp {
+    auto ast = new EqExpAST();
+    ast->eq = unique_ptr<BaseAST>($1);
+    ast->op = unique_ptr<BaseAST>($2);
+    ast->rel = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    ast->place = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
+  ;
+
+EqOp
+  : EQ_CONST {
+    auto ast = new EqOpAST();
+    ast->op = *unique_ptr<string>($1);
+    $$ = ast;
+  }
+  ;
+
+RelExp
+  : AddExp {
+    auto ast = new RelExpAST();
+    ast->add = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | RelExp RelOp AddExp {
+    auto ast = new RelExpAST();
+    ast->rel = unique_ptr<BaseAST>($1);
+    ast->op = unique_ptr<BaseAST>($2);
+    ast->add = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    ast->place = exp_counter;
+    exp_counter++;
+    $$ = ast;
+  }
+  ;
+
+RelOp
+  : REL_CONST {
+    auto ast = new RelOpAST();
+    ast->op = *unique_ptr<string>($1);
+    $$ = ast;
+  }
 
 // 增加AddExp
 AddExp

@@ -104,6 +104,156 @@ class ExpAST : public BaseAST {
     };
 };
 
+class LOrExpAST :public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> lor;
+    std::unique_ptr<BaseAST> op;
+    std::unique_ptr<BaseAST> land;
+    // 在状态1下需要申请3个place
+    int place1, place2, place3;
+    int ast_state;
+    std::string Dump() const override {
+        // 情况和LAnd差不太多
+        // 转换方法
+        // 先用2次ne运算, 若为0保持0, 若不为0转换为1
+        // 再用or运算, 对0/1做按位与(逻辑与)
+        // 需要申请3个place
+        if (ast_state==0) {
+            if (op->GetUpward()=="||") {
+                std::string get_str = "";
+                // 第一个ne运算
+                get_str += lor->Dump()+" %" + std::to_string(place1) + " = ne 0, "+lor->GetUpward()+"\n";
+                // 第二个ne运算
+                get_str += land->Dump()+" %" + std::to_string(place2) + " = ne 0, "+land->GetUpward()+"\n";
+                // 按位或运算
+                get_str += " %" + std::to_string(place3) + " = or"+" %" + std::to_string(place1)+","+" %" + std::to_string(place2) + "\n";
+                return get_str;
+            }
+            else return "";
+        }
+        else if (ast_state==1) return land->Dump();
+        else return "";
+    };
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place3);
+        else if (ast_state==1) return land->GetUpward();
+        else return "";
+    };
+};
+
+class LOrOpAST : public BaseAST {
+    public:
+    std::string op;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {return op;}
+};
+
+class LAndExpAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> land;
+    std::unique_ptr<BaseAST> op;
+    std::unique_ptr<BaseAST> eq;
+    // 在状态1下需要申请3个place
+    int place1, place2, place3;
+    int ast_state;
+    std::string Dump() const override {
+        // 请注意, koopa IR只提供了按位与按位或运算, 需要运算的转换
+        // 转换方法
+        // 先用2次ne运算, 若为0保持0, 若不为0转换为1
+        // 再用and运算, 对0/1做按位与(逻辑与)
+        // 需要申请3个place
+        if (ast_state==0) {
+            if (op->GetUpward()=="&&") {
+                std::string get_str = "";
+                // 第一个ne运算, 包括预备的运算(也许可以短路求值?)
+                get_str += land->Dump()+" %" + std::to_string(place1) + " = ne 0, " + land->GetUpward() + "\n";
+                // 第二个ne运算, 包括预备的运算
+                get_str += eq->Dump()+" %" + std::to_string(place2) + " = ne 0, " + eq->GetUpward()+"\n";
+                // 做按位与运算
+                get_str += " %" + std::to_string(place3) + " = and" +" %" + std::to_string(place1) + "," + " %" + std::to_string(place2) + "\n";
+                return get_str;
+            }
+            else return "";
+        }
+        else if (ast_state==1) return eq->Dump();
+        else return "";
+    };
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place3);
+        else if (ast_state==1) return eq->GetUpward();
+        else return "";
+    };
+};
+
+class LAndOpAST : public BaseAST {
+    public:
+    std::string op;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {return op;}
+};
+
+class EqExpAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> eq;
+    std::unique_ptr<BaseAST> op;
+    std::unique_ptr<BaseAST> rel;
+    int place;
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()=="==") return eq->Dump()+rel->Dump()+" %" + std::to_string(place) + " = eq " +eq->GetUpward()+", "+rel->GetUpward()+"\n";
+            else if (op->GetUpward()=="!=") return eq->Dump()+rel->Dump()+" %" + std::to_string(place) + " = ne " +eq->GetUpward()+", "+rel->GetUpward()+"\n";
+            else return "";
+        }
+        else if (ast_state==1) return rel->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place);
+        else if (ast_state==1) return rel->GetUpward();
+        else return "";
+    }
+};
+
+class EqOpAST : public BaseAST {
+    public:
+    std::string op;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {return op;}
+};
+
+class RelExpAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> rel;
+    std::unique_ptr<BaseAST> op;
+    std::unique_ptr<BaseAST> add;
+    int place;
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()==">") return rel->Dump()+add->Dump()+" %" + std::to_string(place) + " = gt " +rel->GetUpward()+", "+add->GetUpward()+"\n";
+            else if (op->GetUpward()=="<") return rel->Dump()+add->Dump()+" %" + std::to_string(place) + " = lt " +rel->GetUpward()+", "+add->GetUpward()+"\n";
+            else if (op->GetUpward()==">=") return rel->Dump()+add->Dump()+" %" + std::to_string(place) + " = ge " +rel->GetUpward()+", "+add->GetUpward()+"\n";
+            else if (op->GetUpward()=="<=") return rel->Dump()+add->Dump()+" %" + std::to_string(place) + " = le " +rel->GetUpward()+", "+add->GetUpward()+"\n";
+            else return "";
+        }
+        else if (ast_state==1) return add->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return "%" + std::to_string(place);
+        else if (ast_state==1) return add->GetUpward();
+        else return "";
+    }
+};
+
+class RelOpAST : public BaseAST {
+    public:
+    std::string op;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {return op;}
+};
+
 class AddExpAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> add;

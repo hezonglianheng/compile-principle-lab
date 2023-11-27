@@ -249,8 +249,9 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   // 一个是二元运算指针 kind==KOOPA_RVT_BINARY
   // 需要判断指针相同来确定寄存器分配(大概)
   // 需要引入指针来管理寄存器分配
-  // 设计左值 右值 左值寄存器 右值寄存器 本运算寄存器 结果值 
-  string left_str, right_str, left_reg, right_reg, reg, get_str="";
+  // 设计左值 右值 左值寄存器 右值寄存器 本运算寄存器 结果值
+  // 需要为reg设计初值, 以验证reg是否有分到寄存器 
+  string left_str, right_str, left_reg, right_reg, reg="flag", get_str="";
   // 为新建的二元运算分配新的寄存器
   // reg = registers[register_counter];
   // 放入对应值表中
@@ -280,6 +281,7 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
       get_str += "  li   " + left_reg + ", " + left_str + "\n";
       // left_str更新为寄存器地址
       left_str = left_reg;
+      // 本次运算的结果寄存器更新为left的寄存器
       reg = left_reg;
       // 寄存器计数器+1
       register_counter++;
@@ -326,27 +328,81 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     assert(false);
   }
   // reg放入对应值表中
+  // register_distribution[value] = reg;
+  // 查看reg
+  if (reg=="flag") {
+  // 此时说明reg还是初值, 可能是两个即时值之类的, 没有分到寄存器
+  // 为新建的二元运算分配新的寄存器
+  reg = registers[register_counter];
+  // 放入对应值表中
   register_distribution[value] = reg;
+  // 寄存器计数器+1
+  register_counter++;
+  }
+  else {
+  // 此时reg已经不是初值了
+  // 把reg放入对应值表中就好
+  register_distribution[value] = reg;
+  }
   switch (inst.op)
   {
   case KOOPA_RBO_EQ:
+  // 等于(相等的数按位异或的结果是0, 否则是1; 若按位异或的结果是0, 返回1(等于0), 否则返回0)
     get_str += "  xor  " + reg + ", " + right_str + ", " + left_str + "\n";
     get_str += "  seqz " + reg + ", " + reg + "\n";
     break;
+  case KOOPA_RBO_NOT_EQ:
+  // 不等于(相等的数按位异或的结果是0, 否则是1; 若按位异或的结果是0, 返回0(不等于0), 否则返回1)
+    get_str += "  xor  " + reg + ", " + right_str + ", " + left_str + "\n";
+    get_str += "  snez " + reg + ", " + reg + "\n";
+    break;
   case KOOPA_RBO_ADD:
+  // 加法
     get_str += "  add  " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   case KOOPA_RBO_SUB:
+  // 减法
     get_str += "  sub  " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   case KOOPA_RBO_MUL:
+  // 乘法
     get_str += "  mul  " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   case KOOPA_RBO_DIV:
+  // 除法
     get_str += "  div  " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   case KOOPA_RBO_MOD:
+  // 取余数运算
     get_str += "  rem  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_GT:
+  // 大于
+    get_str += "  sgt  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_LT:
+  // 小于
+    get_str += "  slt  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_GE:
+  // 大于等于, 就是“不”“小于”
+    // 判断左小于右
+    get_str += "  slt  " + reg + ", " + left_str + ", " + right_str + "\n";
+    // 判断结果是否是0, 若是, 则左大于等于右=1; 若否, 则左大于等于右=0
+    get_str += "  seqz " + reg + ", " + reg + "\n";
+    break;
+  case KOOPA_RBO_LE:
+  // 小于等于, 就是“不”“大于”
+    get_str += "  sgt  " + reg + ", " + left_str + ", " + right_str + "\n";
+    get_str += "  seqz " + reg + ", " + reg + "\n";
+    break;
+  case KOOPA_RBO_AND:
+  // 按位与运算
+    get_str += "  and  " + reg + ", " + left_str + ", " + right_str + "\n";
+    break;
+  case KOOPA_RBO_OR:
+  // 按位或运算
+    get_str += "  or   " + reg + ", " + left_str + ", " + right_str + "\n";
     break;
   default:
     cout << "unknown type!";
