@@ -39,7 +39,8 @@ int exp_counter = 0;
 
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
-%token INT RETURN
+// 添加关键字CONST(const)
+%token INT RETURN CONST
 // 尝试添加 str_val EQ_CONST REL_CONST
 %token <str_val> IDENT EQ_CONST REL_CONST LAND_CONST LOR_CONST
 // 试图将Number token 的类型调整为int_val, 不行, 还是要作为ast_val
@@ -47,6 +48,10 @@ int exp_counter = 0;
 
 // 非终结符的类型定义
 %type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp RelExp RelOp EqExp EqOp LAndExp LAndOp LOrExp LOrOp
+// lv4定义一批新的类型
+%type <ast_val> Decl ConstDecl BType ConstDef ConstInitVal BlockItem LVal ConstExp
+// 尝试定义类型ConstList BlockList
+%type <ast_val> ConstList BlockList
 
 %%
 
@@ -94,12 +99,119 @@ FuncType
   ;
 
 Block
-  : '{' Stmt '}' {
+  : '{' BlockList '}' {
     auto ast = new BlockAST();
-    ast->stmt = unique_ptr<BaseAST>($2);
+    ast->blocklist = unique_ptr<BaseAST>($2);
     $$ = ast;
     //auto stmt = unique_ptr<string>($2);
     //$$ = new string("{ " + *stmt + " }");
+  }
+  ;
+
+// 增加list以表示重复的问题
+BlockList
+  : BlockItem {
+    auto ast = new BlockListAST();
+    ast->item = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | BlockList BlockItem {
+    auto ast = new BlockListAST();
+    ast->blocklist = unique_ptr<BaseAST>($1);
+    ast->item = unique_ptr<BaseAST>($2);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+BlockItem
+  : Decl {
+    auto ast = new BlockItemAST();
+    ast->item = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | Stmt {
+    auto ast = new BlockItemAST();
+    ast->item = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+Decl
+  : ConstDecl {
+    auto ast = new DeclAST();
+    ast->decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+// todo: 解决匹配多个token0次或多次的问题
+// 尝试: 设计新节点, 转换为左递归文法
+ConstDecl 
+  : CONST BType ConstList ';' {
+    auto ast = new ConstDeclAST();
+    ast->word = "const";
+    ast->btype = unique_ptr<BaseAST>($2);
+    ast->mylist = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  ;
+
+ConstList
+  : ConstDef {
+    auto ast = new ConstListAST();
+    ast->mydef = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | ConstList ',' ConstDef {
+    auto ast = new ConstListAST();
+    ast->mylist = unique_ptr<BaseAST>($1);
+    ast->mydef = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+BType 
+  : INT {
+    auto ast = new BTypeAST();
+    ast->btype = "int";
+    $$ = ast;
+  }
+  ;
+
+ConstDef 
+  : IDENT '=' ConstInitVal {
+    auto ast = new ConstDefAST();
+    ast->ident = *unique_ptr<string>($1);
+    ast->init = unique_ptr<BaseAST>($3);
+    $$ = ast;
+  }
+  ;
+
+ConstInitVal
+  : ConstExp {
+    auto ast = new ConstInitValAST();
+    ast->constexp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+ConstExp
+  : Exp {
+    auto ast = new ConstExpAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+LVal
+  : IDENT {
+    auto ast = new LValAST();
+    ast->ident = *unique_ptr<string>($1);
+    $$ = ast;
   }
   ;
 
@@ -348,6 +460,11 @@ UnaryExp
 
 PrimaryExp
   : Number {
+    auto ast = new PrimaryExpAST();
+    ast->son_tree = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | LVal {
     auto ast = new PrimaryExpAST();
     ast->son_tree = unique_ptr<BaseAST>($1);
     $$ = ast;

@@ -25,6 +25,10 @@ extern int yyparse(unique_ptr<BaseAST> &ast);
 // 尝试在此处定义exp_counter
 // 还是不要在这里定义了, 放到y文件去吧
 //int exp_counter = 0;
+
+// 保存常量名称-值对, 用于编译期间求值
+unordered_map<std::string, int> const_map;
+
 // 声明0号寄存器名称
 const string ZERO_REGISTER = "x0";
 string registers[15] = {"t0", "t1", "t2", "t3", "t4", "t5", 

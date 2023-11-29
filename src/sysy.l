@@ -33,6 +33,7 @@ Hexadecimal 0[xX][0-9a-fA-F]*
 {MultilineComment} {}
 
 "int" {return INT;}
+"const" {return CONST;}
 "return" {return RETURN;}
 {Identifier} {yylval.str_val = new string(yytext); return IDENT;}
 {LOrOp} {yylval.str_val = new string(yytext); return LOR_CONST;}

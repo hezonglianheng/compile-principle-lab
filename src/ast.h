@@ -6,6 +6,12 @@
 # include <memory>
 # include <string>
 # include <iostream>
+# include <unordered_map> // 记录const情况用
+# include <iostream>
+// # include <vector> // 接不定长参数用的
+
+// 记录const及其值的map
+extern std::unordered_map<std::string, int> const_map;
 
 class BaseAST {
     public:
@@ -17,7 +23,9 @@ class BaseAST {
     // GetUpward是收集数据向上传的函数
     // 有的数据需要上传使用, 用这个函数完成
     virtual std::string GetUpward() const = 0;
-    // virtual int Place() const = 0;
+    // GetUpValue是收集数字向上传的函数
+    // 目前用于编译期间计算
+    virtual int GetValue() const = 0;
 };
 
 // CompUnitAST 是 BaseAST
@@ -30,6 +38,7 @@ class CompUnitAST: public BaseAST {
     return func_def->Dump();
     // std::cout << " }";
     };
+    int GetValue() const override {return func_def->GetValue();}
 };
 
 // FuncDef 也是 BaseAST
@@ -47,6 +56,7 @@ class FuncDefAST : public BaseAST {
     //std::cout << " }";
     return "fun @" + ident + "(): " + func_type->Dump() + block->Dump();
   }
+  int GetValue() const override {return block->GetValue();}
 };
 
 // 这个是必要的
@@ -61,18 +71,137 @@ class FuncTypeAST : public BaseAST {
         if (func_type == "int") {return "i32";}
         else {return "";}
     };
+    int GetValue() const override {return 0;}
 };
 
 class BlockAST : public BaseAST {
     public:
-    std::unique_ptr<BaseAST> stmt;
-    std::string GetUpward() const override {return stmt->GetUpward();}
+    // lv4修改: 改成blocklist以反映变化
+    // std::unique_ptr<BaseAST> stmt;
+    std::unique_ptr<BaseAST> blocklist;
+    std::string GetUpward() const override {return blocklist->GetUpward();}
     std::string Dump() const override{
         //std::cout << "BlockAST {";
         //stmt->Dump();
         //std::cout << "}";
-        return "{\n" + stmt->Dump() + "\n}";
+        return "{\n" + blocklist->Dump() + "\n}";
     };
+    int GetValue() const override {return blocklist->GetValue();}
+};
+
+class BlockListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> item;
+    std::unique_ptr<BaseAST> blocklist;
+    // 区分状态, 若只有item为1状态, 否则为0状态
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) return blocklist->Dump() + item->Dump();
+        else if (ast_state==1) return item->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
+};
+
+class BlockItemAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> item;
+    std::string Dump() const override {return item->Dump();}
+    std::string GetUpward() const override {return item->GetUpward();}
+    int GetValue() const override {return item->GetValue();}
+};
+
+class DeclAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> decl;
+    std::string Dump() const override {return decl->Dump();}
+    std::string GetUpward() const override {return decl->GetUpward();}
+    int GetValue() const override {return decl->GetValue();}
+};
+
+class ConstDeclAST : public BaseAST {
+    public:
+    std::string word;
+    std::unique_ptr<BaseAST> btype;
+    std::unique_ptr<BaseAST> mylist;
+    std::string Dump() const override {return mylist->Dump();}
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return mylist->GetValue();}
+};
+
+class ConstListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> mylist;
+    std::unique_ptr<BaseAST> mydef;
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) return mylist->Dump()+mydef->Dump();
+        else if (ast_state==1) return mydef->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
+};
+
+class BTypeAST : public BaseAST {
+    public:
+    std::string btype;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {return btype;}
+    int GetValue() const override {return 0;}
+};
+
+class ConstDefAST : public BaseAST {
+    public:
+    std::string ident;
+    std::unique_ptr<BaseAST> init;
+    std::string Dump() const override {
+        // 将const值的记录实现在这个位置
+        // print大法!
+        // std::cout << "put in:" << init->GetValue();
+        const_map[ident] = init->GetValue();
+        return "";
+    }
+    std::string GetUpward() const override {return init->GetUpward();}
+    int GetValue() const override {
+        return init->GetValue();
+    }
+};
+
+class ConstInitValAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> constexp;
+    std::string Dump() const override {return constexp->Dump();}
+    std::string GetUpward() const override {return constexp->GetUpward();}
+    int GetValue() const override {
+        return constexp->GetValue();
+    }
+};
+
+class ConstExpAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> exp;
+    std::string Dump() const override {return exp->Dump();}
+    std::string GetUpward() const override {return exp->GetUpward();}
+    int GetValue() const override {
+        return exp->GetValue();
+    }
+};
+
+class LValAST : public BaseAST {
+    public:
+    std::string ident;
+    std::string Dump() const override {return "";}
+    std::string GetUpward() const override {
+        // 把值从map中取出来应该放在这个位置
+        // if (const_map.find(ident)==const_map.end()) std::cout << "not found!";
+        // else std::cout << "found!";
+        return std::to_string(const_map[ident]);
+    }
+    int GetValue() const override {
+        return const_map[ident];
+    }
 };
 
 class StmtAST : public BaseAST {
@@ -88,8 +217,10 @@ class StmtAST : public BaseAST {
         if (word=="return") koopa_word = " ret ";
         else return " ";
         // 收集两条路线的上传结果
+        // todo: 此处的entry可能需要改变位置了
         return "\%entry:\n" + expression->Dump() + koopa_word + expression->GetUpward();
     };
+    int GetValue() const override {return expression->GetValue();}
 };
 
 class ExpAST : public BaseAST {
@@ -97,11 +228,12 @@ class ExpAST : public BaseAST {
     std::unique_ptr<BaseAST> exp;
     // 用ast_state记录ast状态
     // 状态0代表处理一元表达式
-    int ast_state;
+    // int ast_state;
     std::string GetUpward() const override {return exp->GetUpward();}
-    std::string Dump() const override {
-        return exp->Dump();
-    };
+    std::string Dump() const override {return exp->Dump();}
+    int GetValue() const override {
+        return exp->GetValue();
+    }
 };
 
 class LOrExpAST :public BaseAST {
@@ -139,6 +271,14 @@ class LOrExpAST :public BaseAST {
         else if (ast_state==1) return land->GetUpward();
         else return "";
     };
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()=="||") return lor->GetValue() || land->GetValue();
+            else return 0;
+        }
+        else if (ast_state==1) return land->GetValue();
+        else return 0;
+    }
 };
 
 class LOrOpAST : public BaseAST {
@@ -146,6 +286,7 @@ class LOrOpAST : public BaseAST {
     std::string op;
     std::string Dump() const override {return "";}
     std::string GetUpward() const override {return op;}
+    int GetValue() const override {return 0;}
 };
 
 class LAndExpAST : public BaseAST {
@@ -183,6 +324,14 @@ class LAndExpAST : public BaseAST {
         else if (ast_state==1) return eq->GetUpward();
         else return "";
     };
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()=="&&") return land->GetValue() && eq->GetValue();
+            else return 0;
+        }
+        else if (ast_state==1) return eq->GetValue();
+        else return 0;
+    }
 };
 
 class LAndOpAST : public BaseAST {
@@ -190,6 +339,7 @@ class LAndOpAST : public BaseAST {
     std::string op;
     std::string Dump() const override {return "";}
     std::string GetUpward() const override {return op;}
+    int GetValue() const override {return 0;}
 };
 
 class EqExpAST : public BaseAST {
@@ -213,6 +363,15 @@ class EqExpAST : public BaseAST {
         else if (ast_state==1) return rel->GetUpward();
         else return "";
     }
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()=="==") return eq->GetValue() == rel->GetValue();
+            else if (op->GetUpward()=="!=") return eq->GetValue() != rel->GetValue(); 
+            else return 0;
+        }
+        else if (ast_state==1) return rel->GetValue();
+        else return 0;
+    }
 };
 
 class EqOpAST : public BaseAST {
@@ -220,6 +379,7 @@ class EqOpAST : public BaseAST {
     std::string op;
     std::string Dump() const override {return "";}
     std::string GetUpward() const override {return op;}
+    int GetValue() const override {return 0;}
 };
 
 class RelExpAST : public BaseAST {
@@ -245,6 +405,17 @@ class RelExpAST : public BaseAST {
         else if (ast_state==1) return add->GetUpward();
         else return "";
     }
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op->GetUpward()==">") return rel->GetValue() > add->GetValue();
+            else if (op->GetUpward()=="<") return rel->GetValue() < add->GetValue();
+            else if (op->GetUpward()==">=") return rel->GetValue() >= add->GetValue();
+            else if (op->GetUpward()=="<=") return rel->GetValue() <= add->GetValue();
+            else return 0;
+        }
+        else if (ast_state==1) return add->GetValue();
+        else return 0;
+    }
 };
 
 class RelOpAST : public BaseAST {
@@ -252,6 +423,7 @@ class RelOpAST : public BaseAST {
     std::string op;
     std::string Dump() const override {return "";}
     std::string GetUpward() const override {return op;}
+    int GetValue() const override {return 0;}
 };
 
 class AddExpAST : public BaseAST {
@@ -274,6 +446,15 @@ class AddExpAST : public BaseAST {
         if (ast_state==0) return "%" + std::to_string(place);
         else if (ast_state==1) return mul->GetUpward();
         else return "";
+    }
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op=="+") return add->GetValue() + mul->GetValue();
+            else if (op=="-") return add->GetValue() - mul->GetValue();
+            else return 0;
+        }
+        else if (ast_state==1) return mul->GetValue();
+        else return 0;
     }
 };
 
@@ -302,6 +483,16 @@ class MulExpAST :public BaseAST {
         if (ast_state==0) return "%" + std::to_string(place);
         else if (ast_state==1) return unary->GetUpward();
         else return "";
+    }
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op=="*") return mul->GetValue() * unary->GetValue();
+            else if (op=="/") return mul->GetValue() / unary->GetValue();
+            else if (op=="%") return mul->GetValue() % unary->GetValue();
+            else return 0;
+        }
+        else if (ast_state==1) return unary->GetValue();
+        else return 0;
     }
 };
 
@@ -351,6 +542,16 @@ class UnaryExpAST : public BaseAST {
         }
         else return " ";
     };
+    int GetValue() const override {
+        if (ast_state==0) {
+            if (op=="+") return son_tree->GetValue();
+            else if (op=="-") return -(son_tree->GetValue());
+            else if (op=="!") return !(son_tree->GetValue());
+            else return 0;
+        }
+        else if (ast_state==1) return son_tree->GetValue();
+        else return 0;
+    }
 };
 
 class PrimaryExpAST : public BaseAST {
@@ -365,6 +566,7 @@ class PrimaryExpAST : public BaseAST {
         // 保留子孙的dump结果不变
         return son_tree->Dump();
     };
+    int GetValue() const override {return son_tree->GetValue();}
 };
 
 // 添加AST节点UnaryOpAST用来翻译一元运算符
@@ -400,6 +602,7 @@ class NumberAST : public BaseAST {
         // 将数作为upward值上传
         return "";
     };
+    int GetValue() const override {return int_const;}
 };
 
 # endif
