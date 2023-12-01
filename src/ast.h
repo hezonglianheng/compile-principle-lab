@@ -10,11 +10,19 @@
 # include <iostream>
 // # include <vector> // 接不定长参数用的
 
+// 尝试定义新的类型, 用于承接变量的信息
+struct varinfo {
+    int vartype; // 0为const, 1为var
+    int value;
+    std::string name;  // 这个是变量名称 这里可能有点问题. 先写着, 报错再说
+};
+
 // 记录const及其值的map
-extern std::unordered_map<std::string, int> const_map;
+extern std::unordered_map<std::string, varinfo> var_map;
 
 class BaseAST {
     public:
+    std::string fromup;
     // std::string upward = "";
     virtual ~BaseAST() = default;
     // Dump()是用来输出的函数
@@ -84,7 +92,7 @@ class BlockAST : public BaseAST {
         //std::cout << "BlockAST {";
         //stmt->Dump();
         //std::cout << "}";
-        return "{\n" + blocklist->Dump() + "\n}";
+        return "{\n\%entry:\n" + blocklist->Dump() + "}";
     };
     int GetValue() const override {return blocklist->GetValue();}
 };
@@ -125,23 +133,103 @@ class ConstDeclAST : public BaseAST {
     std::string word;
     std::unique_ptr<BaseAST> btype;
     std::unique_ptr<BaseAST> mylist;
-    std::string Dump() const override {return mylist->Dump();}
+    std::string Dump() const override {
+        mylist->fromup = btype->GetUpward();
+        return mylist->Dump();
+    }
     std::string GetUpward() const override {return "";}
     int GetValue() const override {return mylist->GetValue();}
+};
+
+class VarDeclAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> btype;
+    std::unique_ptr<BaseAST> mylist;
+    std::string Dump() const override {
+        mylist->fromup = btype->GetUpward();
+        return mylist->Dump();
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return mylist->GetValue();}
+};
+
+class VarListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> mylist;
+    std::unique_ptr<BaseAST> mydef;
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            mylist->fromup = fromup;
+            mydef->fromup = fromup;
+            return mylist->Dump()+mydef->Dump();
+        }
+        else if (ast_state==1) {
+            mydef->fromup = fromup;
+            return mydef->Dump();
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
+};
+
+class VarDefAST : public BaseAST {
+    public:
+    std::string ident;
+    std::unique_ptr<BaseAST> init;
+    int ast_state; // 定义表达式状态, 0为有定义, 1为只声明
+    std::string Dump() const override {
+        // 压入map放在这个位置进行
+        varinfo info;
+        info.vartype = 1;
+        info.name = "@" + ident;
+        var_map[ident] = info;
+        if (ast_state==0) {
+            if (fromup=="int") return " " + info.name + " = alloc i32\n" + init->Dump() + " store " + init->GetUpward() + ", " + info.name + "\n";
+            else return "";
+        }
+        else if (ast_state==1) {
+            //return info.name + " = alloc "
+            if (fromup=="int") return info.name + " = alloc i32\n";
+            else return "";
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return ident;}
+    int GetValue() const override {return 0;}
+};
+
+class InitValAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> exp;
+    std::string Dump() const override {return exp->Dump();}
+    std::string GetUpward() const override {return exp->GetUpward();}
+    int GetValue() const override {return exp->GetValue();}
 };
 
 class ConstListAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> mylist;
     std::unique_ptr<BaseAST> mydef;
+    // std::unique_ptr<BaseAST> btype;
     int ast_state;
     std::string Dump() const override {
-        if (ast_state==0) return mylist->Dump()+mydef->Dump();
-        else if (ast_state==1) return mydef->Dump();
+        if (ast_state==0) {
+            // fromup传递数据类型给下方节点
+            mydef->fromup = fromup;
+            mylist->fromup = fromup;
+            return mylist->Dump()+mydef->Dump();
+        }
+        else if (ast_state==1) {
+            // fromup传递数据类型给下方节点
+            mydef->fromup = fromup;
+            return mydef->Dump();
+        }
         else return "";
     }
-    std::string GetUpward() const override {return "";}
-    int GetValue() const override {return 0;}
+    std::string GetUpward() const override {return fromup;}
+    int GetValue() const override {return mydef->GetValue();}
 };
 
 class BTypeAST : public BaseAST {
@@ -158,15 +246,17 @@ class ConstDefAST : public BaseAST {
     std::unique_ptr<BaseAST> init;
     std::string Dump() const override {
         // 将const值的记录实现在这个位置
-        // print大法!
-        // std::cout << "put in:" << init->GetValue();
-        const_map[ident] = init->GetValue();
+        if (fromup=="int") {
+        varinfo constinfo;
+        constinfo.vartype = 0;
+        constinfo.value = init->GetValue();
+        var_map[ident] = constinfo;
+        }
+        else;
         return "";
     }
-    std::string GetUpward() const override {return init->GetUpward();}
-    int GetValue() const override {
-        return init->GetValue();
-    }
+    std::string GetUpward() const override {return ident;}
+    int GetValue() const override {return init->GetValue();}
 };
 
 class ConstInitValAST : public BaseAST {
@@ -184,43 +274,91 @@ class ConstExpAST : public BaseAST {
     std::unique_ptr<BaseAST> exp;
     std::string Dump() const override {return exp->Dump();}
     std::string GetUpward() const override {return exp->GetUpward();}
-    int GetValue() const override {
-        return exp->GetValue();
-    }
+    int GetValue() const override {return exp->GetValue();}
 };
 
 class LValAST : public BaseAST {
     public:
     std::string ident;
-    std::string Dump() const override {return "";}
+    int place; // 表明变量占用的临时符号
+    std::string Dump() const override {
+        if (var_map.find(ident)==var_map.end()) return "";
+        else {
+            if (var_map[ident].vartype==0) return "";
+            else if (var_map[ident].vartype==1) {
+                if (fromup=="stmt") return "";
+                else if (fromup=="exp") return " %"+std::to_string(place)+" = load "+var_map[ident].name+"\n";
+                else return "";
+            }
+            else return "";
+        }
+    }
     std::string GetUpward() const override {
         // 把值从map中取出来应该放在这个位置
         // if (const_map.find(ident)==const_map.end()) std::cout << "not found!";
         // else std::cout << "found!";
-        return std::to_string(const_map[ident]);
+        // return std::to_string(var_map[ident]);
+        if (var_map.find(ident)==var_map.end()) return "";
+        else {
+            if (var_map[ident].vartype==0) return std::to_string(var_map[ident].value);
+            else if (var_map[ident].vartype==1) {
+                if (fromup=="stmt") return var_map[ident].name;
+                else if (fromup=="exp") return "%"+std::to_string(place); 
+                else return "";
+            }
+            else return "";
+        }
     }
     int GetValue() const override {
-        return const_map[ident];
+        // return var_map[ident];
+        if (var_map.find(ident)==var_map.end()) return 0;
+        else {
+            if (var_map[ident].vartype==0) return var_map[ident].value;
+            else if (var_map[ident].vartype==1) return 0;
+            else return 0;
+        }
     }
 };
 
 class StmtAST : public BaseAST {
     public:
     std::string word;
+    std::unique_ptr<BaseAST> lval;
     std::unique_ptr<BaseAST> expression;
-    std::string GetUpward() const override {return expression->GetUpward();}
+    int ast_state;  // 0表示return语句, 1表示赋值语句
+    std::string GetUpward() const override {
+        if (ast_state==0) return expression->GetUpward();
+        else if (ast_state==1) {
+            lval->fromup = "stmt"; // 表明为表达式左值
+            return lval->GetUpward();
+        }
+        else return "";
+    }
     std::string Dump() const override {
         //std::cout << "StmtAST {";
         //number->Dump();
         //std::cout << "}";
-        std::string koopa_word;
-        if (word=="return") koopa_word = " ret ";
-        else return " ";
+        // std::string koopa_word;
+        // if (word=="return") koopa_word = " ret ";
+        // else return " ";
         // 收集两条路线的上传结果
         // todo: 此处的entry可能需要改变位置了
-        return "\%entry:\n" + expression->Dump() + koopa_word + expression->GetUpward();
+        // return "\%entry:\n" + expression->Dump() + koopa_word + expression->GetUpward();
+        if (ast_state==0) return expression->Dump() + " ret " + expression->GetUpward()+"\n";
+        else if (ast_state==1) {
+            lval->fromup = "stmt"; // 表明为表达式左值
+            return expression->Dump() + " store " + expression->GetUpward() + ", " + lval->GetUpward()+"\n";
+        }
+        else return "";
     };
-    int GetValue() const override {return expression->GetValue();}
+    int GetValue() const override {
+        if (ast_state==0) return expression->GetValue();
+        else if (ast_state==1) {
+            lval->fromup = "stmt"; // 表明为表达式左值
+            return lval->GetValue();
+        }
+        else return 0;
+    }
 };
 
 class ExpAST : public BaseAST {
@@ -557,16 +695,36 @@ class UnaryExpAST : public BaseAST {
 class PrimaryExpAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> son_tree;
+    int ast_state;  // 0表示为number or exp, 1表示lval
     // 将子树的upward直接上传
     // upward = son_tree->upward;
     std::string GetUpward() const override {
-        return son_tree->GetUpward();
+        // return son_tree->GetUpward();
+        if (ast_state==0) return son_tree->GetUpward();
+        else if (ast_state==1) {
+            son_tree->fromup = "exp"; // 表明为表达式右值
+            return son_tree->GetUpward();
+        }
+        else return "";
     };
     std::string Dump() const override {
         // 保留子孙的dump结果不变
-        return son_tree->Dump();
+        // return son_tree->Dump();
+        if (ast_state==0) return son_tree->Dump();
+        else if (ast_state==1) {
+            son_tree->fromup = "exp"; // 表明为表达式右值
+            return son_tree->Dump();
+        }
+        else return "";
     };
-    int GetValue() const override {return son_tree->GetValue();}
+    int GetValue() const override {
+        if (ast_state==0) return son_tree->GetValue();
+        else if (ast_state==1) {
+            son_tree->fromup = "exp"; // 表明为表达式右值
+            return son_tree->GetValue();
+        }
+        else return 0;
+    }
 };
 
 // 添加AST节点UnaryOpAST用来翻译一元运算符

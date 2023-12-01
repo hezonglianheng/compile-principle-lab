@@ -27,7 +27,7 @@ extern int yyparse(unique_ptr<BaseAST> &ast);
 //int exp_counter = 0;
 
 // 保存常量名称-值对, 用于编译期间求值
-unordered_map<std::string, int> const_map;
+unordered_map<std::string, varinfo> var_map;
 
 // 声明0号寄存器名称
 const string ZERO_REGISTER = "x0";
@@ -35,9 +35,17 @@ string registers[15] = {"t0", "t1", "t2", "t3", "t4", "t5",
 "t6", "a1", "a2", "a3", "a4", "a5", "a6", "a0"};
 
 // 存放已经分配好的register和指针的关系
-unordered_map<koopa_raw_value_t, string> register_distribution;
+// 暂时废除
+// unordered_map<koopa_raw_value_t, string> register_distribution;
 // 使用的register的全局计数器
-int register_counter = 0;
+// 暂时废除
+// int register_counter = 0;
+// 存放函数中各指针与栈位置的关系
+// 目前的设计是只支持一个函数使用, 用完就clear
+unordered_map<koopa_raw_value_t, int> stack_place;
+// 一样的, 表明目前还没有用到的位置在哪里
+// 只支持一个函数使用, 用完就归零
+int unused_tag = 0;
 
 // 声明Visit函数的用法
 string Visit(const koopa_raw_program_t &program);
@@ -49,6 +57,14 @@ string Visit(const koopa_raw_return_t inst);
 string Visit(const koopa_raw_integer_t inst);
 // 增加声明识别二元运算符的函数
 string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value);
+// 增加访问load store指令的Visit函数
+string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value);
+string Visit(const koopa_raw_store_t store);
+// 增加计算函数所用栈空间和基本块所用栈空间的函数
+int CountStackSpace(const koopa_raw_slice_t &slice);
+// 增加计算类型占据栈空间的函数
+// 通过类型判断需要给多大存储空间的函数
+int CountStackSpace(const koopa_raw_type_t type);
 
 int main(int argc, const char *argv[]) {
   // 解析命令行参数. 测试脚本/评测平台要求你的编译器能接收如下参数:
@@ -162,10 +178,49 @@ string Visit(const koopa_raw_function_t &func) {
   // 执行一些其他的必要操作
   // 获得函数的名字作为标识符
   string func_name = func->name;
+  // get_str用于接住要输出的字符串
+  string get_str = func_name.substr(1, func_name.length()) + ":\n";
+  // 获知需要分配的栈空间情况
+  int use_space = CountStackSpace(func->bbs);
+  // get_str += "  addi sp, sp, " + to_string(-use_space) + "\n";
+  if (use_space==0);  // 0的场合直接优化, 不使用栈
+  else if (use_space>=2048) {
+    get_str += "  li   " + registers[0] + ", " + to_string(-use_space) + "\n";
+    get_str += "  add  sp, sp, " + registers[0] + "\n";
+  }
+  else get_str += "  addi sp, sp, " + to_string(-use_space) + "\n";
   // 访问所有基本块
   string blocks_str = Visit(func->bbs);
+  // 检查基本块情况
+  if (blocks_str.size() >= 3) {
+    if (blocks_str.substr(blocks_str.size()-3, 3)=="ret"){
+      get_str += blocks_str.substr(0, blocks_str.size()-3);
+      // get_str += "addi sp, sp, " + to_string(use_space) + "\n";
+      if (use_space==0);  // 0的场合不用栈
+      else if (use_space>=2048) {
+        get_str += "  li   " + registers[0] + ", " + to_string(use_space) + "\n";
+        get_str += "  add  sp, sp, " + registers[0] + "\n";
+      }
+      else get_str += "addi sp, sp, " + to_string(use_space) + "\n";
+      get_str += "  ret\n";
+    }
+    else {
+      cout << "no return!";
+      assert(false);
+    }
+  }
+  else {
+  // 否则直接报错
+    cout << "string too short!";
+    assert(false);
+  }
+  // 返回之前先把栈中标识符记录报销了
+  stack_place.clear();
+  // 还得报销一个未使用记录位置
+  unused_tag = 0;
   // 返回函数的riscv表示形式
-  return func_name.substr(1, func_name.length()) + ":\n" + blocks_str;
+  return get_str;
+  // return func_name.substr(1, func_name.length()) + ":\n" + blocks_str;
 }
 
 // 访问基本块
@@ -197,6 +252,20 @@ string Visit(const koopa_raw_value_t &value) {
       // 访问 binary 指令并获得返回的字符串
       get_str = Visit(kind.data.binary, value);
       break;
+    case KOOPA_RVT_ALLOC:
+      // 11-30: 添加类型 alloc
+      // alloc类型什么也不做(不行, 得进存储)
+      stack_place[value] = unused_tag;
+      unused_tag += 4;
+      break;
+    case KOOPA_RVT_LOAD:
+      // 11-30: 添加类型 load
+      get_str = Visit(kind.data.load, value);
+      break;
+    case KOOPA_RVT_STORE:
+      // 11-30: 添加类型 store
+      get_str = Visit(kind.data.store);
+      break;
     // 这个东西可能是指针, 可能需要处理
     //case KOOPA_RVT_GET_PTR:
       //cout << "get a pointer!";
@@ -224,8 +293,13 @@ string Visit(const koopa_raw_return_t inst){
     get_str += "  li   a0, " + ret_str + "\n  ret";
     break;
   case KOOPA_RVT_BINARY:
-    ret_str = register_distribution[ret_value];
-    get_str += "  mv   a0, " + ret_str + "\n  ret";
+    // ret_str = register_distribution[ret_value];
+    ret_str = to_string(stack_place[ret_value]);
+    get_str += "  lw   a0, " + ret_str + "(sp)\n  ret";
+    break;
+  case KOOPA_RVT_LOAD:
+    ret_str = to_string(stack_place[ret_value]);
+    get_str += "  lw   a0, " + ret_str + "(sp)\n  ret";
     break;
   default:
     break;
@@ -256,6 +330,7 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   // 设计左值 右值 左值寄存器 右值寄存器 本运算寄存器 结果值
   // 需要为reg设计初值, 以验证reg是否有分到寄存器 
   string left_str, right_str, left_reg, right_reg, reg="flag", get_str="";
+  int register_counter = 0; // 计数, 我怎么用寄存器的
   // 为新建的二元运算分配新的寄存器
   // reg = registers[register_counter];
   // 放入对应值表中
@@ -294,9 +369,30 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     break;
   case KOOPA_RVT_BINARY:
   // 若为已有的二元运算, 则要找出该二元运算用的寄存器
-    left_str = register_distribution[inst.lhs];
+  // 12-1修改: 修正为二元运算结果的栈上位置
+    // left_str = register_distribution[inst.lhs];
+    left_str = to_string(stack_place[inst.lhs]);
+    // 为非0左值分配一个新的寄存器
+    left_reg = registers[register_counter];
+    // 计数器自增
+    register_counter++;
+    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
     // 更新reg寄存器
-    reg = left_str;
+    reg = left_reg;
+    // 更新left_str
+    left_str = left_reg;
+    break;
+  case KOOPA_RVT_LOAD:
+    left_str = to_string(stack_place[inst.lhs]);
+    // 为非0左值分配一个新的寄存器
+    left_reg = registers[register_counter];
+    // 计数器自增
+    register_counter++;
+    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    // 更新reg寄存器
+    reg = left_reg;
+    // 更新left_str
+    left_str = left_reg;
     break;
   default:
   // 否则报错
@@ -323,9 +419,25 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     break;
   case KOOPA_RVT_BINARY:
   // 若为已有的二元运算, 则要找出该二元运算用的寄存器
-    right_str = register_distribution[inst.rhs];
+    // right_str = register_distribution[inst.rhs];
+    right_str = to_string(stack_place[inst.rhs]);
+    right_reg = registers[register_counter];
+    register_counter++;
+    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
     // 更新right寄存器
-    reg = right_str;
+    reg = right_reg;
+    // 更新right_str
+    right_str = right_reg;
+    break;
+  case KOOPA_RVT_LOAD:
+    right_str = to_string(stack_place[inst.rhs]);
+    right_reg = registers[register_counter];
+    register_counter++;
+    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    // 更新right寄存器
+    reg = right_reg;
+    // 更新right_str
+    right_str = right_reg;
     break;
   default:
   // 否则报错
@@ -339,14 +451,14 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   // 为新建的二元运算分配新的寄存器
   reg = registers[register_counter];
   // 放入对应值表中
-  register_distribution[value] = reg;
+  // register_distribution[value] = reg;
   // 寄存器计数器+1
   register_counter++;
   }
-  else {
+  else {;
   // 此时reg已经不是初值了
   // 把reg放入对应值表中就好
-  register_distribution[value] = reg;
+  // register_distribution[value] = reg;
   }
   switch (inst.op)
   {
@@ -412,5 +524,174 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     cout << "unknown type!";
     break;
   }
+  // 放入stack上
+  stack_place[value] = unused_tag;
+  get_str += "  sw   " + reg + ", " + to_string(unused_tag) + "(sp)\n";
+  unused_tag += CountStackSpace(value->ty);
   return get_str;
+}
+
+// 计算栈需要的空间S'
+int CountStackSpace(const koopa_raw_slice_t &slice) {
+  int count_space = 0;
+  koopa_raw_basic_block_t block_ptr;
+  koopa_raw_value_t value_ptr;
+  for (size_t i = 0; i < slice.len; ++i) {
+    auto ptr = slice.buffer[i];
+    switch (slice.kind) {
+      case KOOPA_RSIK_BASIC_BLOCK:
+        block_ptr = reinterpret_cast<koopa_raw_basic_block_t>(ptr);
+        count_space += CountStackSpace(block_ptr->insts);
+        break;
+      case KOOPA_RSIK_VALUE:
+        value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
+        count_space += CountStackSpace(value_ptr->ty);
+        break;
+      default:
+      // 其他情况报错
+        cout << "unknown kind!";
+        assert(false);
+        break;
+    }
+  }
+  // cout << count_space;
+  // return (count_space / 16 + 1) * 16;
+  switch (slice.kind) {
+    case KOOPA_RSIK_BASIC_BLOCK:
+      return count_space;
+      break;
+    case KOOPA_RSIK_VALUE:
+      // return (count_space / 16 + 1) * 16;
+      if (count_space % 16 == 0) return count_space;
+      else return (count_space / 16 + 1) * 16;
+      break;
+    default:
+      cout << "problem!";
+      assert(false);
+      break;
+  }
+}
+
+// 访问加载指令
+string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
+  string get_str = "";  // 需要返回的操作字符串
+  int register_counter = 0; // 计数, 我怎么用寄存器的
+  int src_place; // source的位置
+  int value_place; // 本指令对应的value指针在栈中的位置
+  const auto src_kind = load.src->kind;  // 加载值的类型
+  // 先进行读存操作
+  switch (src_kind.tag) {
+    case KOOPA_RVT_ALLOC:
+    // 局部申存, 这意味着是@x形式的标号, 需要找到位置
+      if (stack_place.find(load.src)==stack_place.end()) {
+        // 找不到就报错
+        cout << "symbol not defined!";
+        assert(false);
+    }
+      else {
+        // 否则记录位置, 执行读存操作
+        src_place = stack_place[load.src];
+        get_str += "  lw   " + registers[register_counter] + ", " + to_string(src_place) + "(sp)\n";
+    }
+    break;
+    default:
+      assert(false);
+      break;
+  }
+  // 然后是写存操作
+  value_place = unused_tag;
+  stack_place[value] = value_place;
+  get_str += "  sw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+  unused_tag += CountStackSpace(load.src->ty);
+  return get_str;
+}
+
+// 访问存储指令
+string Visit(const koopa_raw_store_t store) {
+  string get_str = "";  // 需要返回的操作字符串
+  int register_counter = 0; // 计数, 我怎么用寄存器的
+  string value_str; // value值的字符串形式
+  int value_place; // value在栈上的位置
+  int dest_place; // dest在栈上的位置
+  const auto value_kind = store.value->kind;  // 值的类型
+  const auto dest_kind = store.dest->kind; // 存储标识符的类型?
+  switch (value_kind.tag)
+  {
+  case KOOPA_RVT_INTEGER:
+    /* 若为数字, 就将数字的值写到寄存器里去 */
+    value_str = Visit(store.value);  // 获得值的字符串表示
+    get_str += "  li   " + registers[register_counter] + ", " + value_str + "\n";
+    break;
+  case KOOPA_RVT_BINARY:
+    /* 若为二元表达式, 这可能是%x形式的标号, 需要找到栈上位置 */
+    if (stack_place.find(store.value)==stack_place.end()) {
+      cout << "symbol not defined!";
+      assert(false);
+    }
+    else {
+      value_place = stack_place[store.value];
+      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+    }
+    break;
+  case KOOPA_RVT_ALLOC:
+    /* 若为局部申存, 这意味着是@x形式的标号, 需要找到栈上位置 */
+    if (stack_place.find(store.value)==stack_place.end()) {
+      cout << "symbol not defined!";
+      assert(false);
+    }
+    else {
+      value_place = stack_place[store.value];
+      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+    }
+    break;
+  default:
+    /* 其他情况报错 */
+    cout << "unknown kind!";
+    assert(false);
+    break;
+  }
+  switch (dest_kind.tag)
+  {
+  case KOOPA_RVT_ALLOC:
+    /* 若为局部申存, 这意味着是@x形式的标号, 此时给一个位置 */
+    if (stack_place.find(store.dest)==stack_place.end()){
+      // 找不到的场合, 分一个新位置
+      dest_place = unused_tag;
+      unused_tag += CountStackSpace(store.value->ty);  // 这里需要改吗?
+      get_str += "  sw   " + registers[register_counter] + ", " + to_string(dest_place) + "(sp)\n";
+    }
+    else {
+      // 找到了的场合, 分一个旧位置
+      dest_place = stack_place[store.dest];
+      get_str += "  sw   " + registers[register_counter] + ", " + to_string(dest_place) + "(sp)\n";
+    }
+    break;
+  default:
+    // 否则报错
+    assert(false);
+    break;
+  }
+  return get_str;
+}
+
+// 通过类型判断需要给多大存储空间的函数
+int CountStackSpace(const koopa_raw_type_t type){
+  int count_space = 0;
+  switch (type->tag) {
+    case KOOPA_RTT_INT32:
+      count_space += 4;
+      break;
+    case KOOPA_RTT_UNIT:
+      // 若为void则分配0-不分配
+      break;
+    case KOOPA_RTT_POINTER:
+      // alloc好像是pointer类型, 注意pointer类型操作
+      count_space += CountStackSpace(type->data.pointer.base);
+      break;
+    default:
+      cout << "unknown value type!";
+      assert(false);
+      break;
+  }
+  return count_space;
 }

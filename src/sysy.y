@@ -49,9 +49,9 @@ int exp_counter = 0;
 // 非终结符的类型定义
 %type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp RelExp RelOp EqExp EqOp LAndExp LAndOp LOrExp LOrOp
 // lv4定义一批新的类型
-%type <ast_val> Decl ConstDecl BType ConstDef ConstInitVal BlockItem LVal ConstExp
-// 尝试定义类型ConstList BlockList
-%type <ast_val> ConstList BlockList
+%type <ast_val> Decl ConstDecl BType ConstDef ConstInitVal BlockItem LVal ConstExp VarDecl VarDef InitVal 
+// 尝试定义类型ConstList BlockList VarList
+%type <ast_val> ConstList BlockList VarList
 
 %%
 
@@ -144,6 +144,11 @@ Decl
     ast->decl = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
+  | VarDecl {
+    auto ast = new DeclAST();
+    ast->decl = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
   ;
 
 // todo: 解决匹配多个token0次或多次的问题
@@ -154,6 +159,56 @@ ConstDecl
     ast->word = "const";
     ast->btype = unique_ptr<BaseAST>($2);
     ast->mylist = unique_ptr<BaseAST>($3);
+    // ast->mylist->fromup = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  ;
+
+VarDecl
+  : BType VarList ';' {
+    auto ast = new VarDeclAST();
+    ast->btype = unique_ptr<BaseAST>($1);
+    ast->mylist = unique_ptr<BaseAST>($2);
+    $$ = ast;
+  }
+  ;
+
+VarList
+  : VarDef {
+    auto ast = new VarListAST();
+    ast->mydef = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | VarList ',' VarDef {
+    auto ast = new VarListAST();
+    ast->mylist = unique_ptr<BaseAST>($1);
+    ast->mydef = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+VarDef
+  : IDENT {
+    auto ast = new VarDefAST();
+    ast->ident = *unique_ptr<string>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | IDENT '=' InitVal {
+    auto ast = new VarDefAST();
+    ast->ident = *unique_ptr<string>($1);
+    ast->init = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+InitVal
+  : Exp {
+    auto ast = new InitValAST();
+    ast->exp = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
   ;
@@ -211,15 +266,25 @@ LVal
   : IDENT {
     auto ast = new LValAST();
     ast->ident = *unique_ptr<string>($1);
+    ast->place = exp_counter;
+    exp_counter++;
     $$ = ast;
   }
   ;
 
 Stmt
-  : RETURN Exp ';' {
+  : LVal '=' Exp ';' {
+    auto ast = new StmtAST();
+    ast->lval = unique_ptr<BaseAST>($1);
+    ast->expression = unique_ptr<BaseAST>($3);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | RETURN Exp ';' {
     auto ast = new StmtAST();
     ast->word = "return";
     ast->expression = unique_ptr<BaseAST>($2);
+    ast->ast_state = 0;
     $$ = ast;
     //auto number = unique_ptr<string>($2);
     //$$ = new string("return " + *number + ";");
@@ -462,16 +527,19 @@ PrimaryExp
   : Number {
     auto ast = new PrimaryExpAST();
     ast->son_tree = unique_ptr<BaseAST>($1);
+    ast->ast_state = 0;
     $$ = ast;
   }
   | LVal {
     auto ast = new PrimaryExpAST();
     ast->son_tree = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
     $$ = ast;
   }
   | '(' Exp ')' {
     auto ast = new PrimaryExpAST();
     ast->son_tree = unique_ptr<BaseAST>($2);
+    ast->ast_state = 0;
     $$ = ast;
   }
   ;
