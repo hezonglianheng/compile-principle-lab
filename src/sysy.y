@@ -18,6 +18,7 @@ void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
 using namespace std;
 
 int exp_counter = 0;
+const int FIRST_LAYER = 1;
 
 %}
 
@@ -52,6 +53,8 @@ int exp_counter = 0;
 %type <ast_val> Decl ConstDecl BType ConstDef ConstInitVal BlockItem LVal ConstExp VarDecl VarDef InitVal 
 // 尝试定义类型ConstList BlockList VarList
 %type <ast_val> ConstList BlockList VarList
+// lv5定义新类型
+%type <ast_val> SideExp
 
 %%
 
@@ -84,6 +87,7 @@ FuncDef
     ast->func_type = unique_ptr<BaseAST>($1);
     ast->ident = *unique_ptr<string>($2);
     ast->block = unique_ptr<BaseAST>($5);
+    ast->layer = FIRST_LAYER; // 在此处添加层次标记1
     $$ = ast;
   }
   ;
@@ -110,12 +114,19 @@ Block
 
 // 增加list以表示重复的问题
 BlockList
+  : /*empty rule*/ {
+    auto ast = new BlockListAST();
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  /*
   : BlockItem {
     auto ast = new BlockListAST();
     ast->item = unique_ptr<BaseAST>($1);
     ast->ast_state = 1;
     $$ = ast;
   }
+  */
   | BlockList BlockItem {
     auto ast = new BlockListAST();
     ast->blocklist = unique_ptr<BaseAST>($1);
@@ -272,12 +283,25 @@ LVal
   }
   ;
 
+// lv5增加Stmt的[Exp];和Block两种分支
 Stmt
   : LVal '=' Exp ';' {
     auto ast = new StmtAST();
     ast->lval = unique_ptr<BaseAST>($1);
     ast->expression = unique_ptr<BaseAST>($3);
     ast->ast_state = 1;
+    $$ = ast;
+  }
+  | SideExp {
+    auto ast = new StmtAST();
+    ast->expression = unique_ptr<BaseAST>($1);
+    ast->ast_state = 2;
+    $$ = ast;
+  }
+  | Block {
+    auto ast = new StmtAST();
+    ast->expression = unique_ptr<BaseAST>($1);
+    ast->ast_state = 3;
     $$ = ast;
   }
   | RETURN Exp ';' {
@@ -288,6 +312,20 @@ Stmt
     $$ = ast;
     //auto number = unique_ptr<string>($2);
     //$$ = new string("return " + *number + ";");
+  }
+  ;
+
+SideExp
+  : ';' {
+    auto ast = new SideExpAST();
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | Exp ';' {
+    auto ast = new SideExpAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    ast->ast_state = 0;
+    $$ = ast;
   }
   ;
 
