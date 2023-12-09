@@ -10,6 +10,7 @@
 - 2023.11.29 通过lv4.1
 - 2023.12.1 通过lv4
 - 2023.12.5 通过lv5
+- 2023.12.9 通过lv6
 
 ## 一些笔记
 - 本实践课作业的说明文档存在一些typo
@@ -83,10 +84,19 @@ if (exp) others else if (exp) if (exp) others
 最终, 我们需要实现的语法规则为
 ```ebnf
 IfStmt ::= Open | Close
-Open ::= "if" '(' Exp ')' Open 
+Open ::= "if" '(' Exp ')' IfStmt 
         | "if" '(' Exp ')' Close "else" Open
 Close ::= Others
         | "if" '(' Exp ')' Close "else" Close
 Others ::= ...
 ```
 这就是悬空`"else"`问题的解决方案.
+
+## 一个暂时不修的bug
+目前发现, 在ast.h文件的LValAST的实现中, 如果代码为
+```c
+int a = 4;
+a = a + 1;
+return a;
+```
+则在执行时, 其`IdentSearch()`函数会在解析语句`a = a + 1`之前执行一次, 且此时无法找到`a`. 但若没有第二行计算语句, 则不会报错. 目前由于不影响过样例, 故暂时不修改. 

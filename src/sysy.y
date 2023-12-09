@@ -18,7 +18,11 @@ void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
 using namespace std;
 
 int exp_counter = 0;
-const int FIRST_LAYER = 1;
+// lv6增加的对if语句的计数
+int if_counter = 0;
+// lv5增加Stmt的第一层常数
+// const int FIRST_LAYER = 1;
+int layer_count = 1;
 
 %}
 
@@ -41,7 +45,8 @@ const int FIRST_LAYER = 1;
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 // 添加关键字CONST(const)
-%token INT RETURN CONST
+// lv6添加关键字IF ELSE
+%token INT RETURN CONST IF ELSE
 // 尝试添加 str_val EQ_CONST REL_CONST
 %token <str_val> IDENT EQ_CONST REL_CONST LAND_CONST LOR_CONST
 // 试图将Number token 的类型调整为int_val, 不行, 还是要作为ast_val
@@ -55,6 +60,8 @@ const int FIRST_LAYER = 1;
 %type <ast_val> ConstList BlockList VarList
 // lv5定义新类型
 %type <ast_val> SideExp
+// lv6定义新类型IfStmt IfOpenStmt IfCloseStmt
+%type <ast_val> IfStmt IfOpenStmt IfCloseStmt
 
 %%
 
@@ -87,7 +94,7 @@ FuncDef
     ast->func_type = unique_ptr<BaseAST>($1);
     ast->ident = *unique_ptr<string>($2);
     ast->block = unique_ptr<BaseAST>($5);
-    ast->layer = FIRST_LAYER; // 在此处添加层次标记1
+    // ast->layer = FIRST_LAYER; // 在此处添加层次标记1
     $$ = ast;
   }
   ;
@@ -106,6 +113,8 @@ Block
   : '{' BlockList '}' {
     auto ast = new BlockAST();
     ast->blocklist = unique_ptr<BaseAST>($2);
+    ast->layer = layer_count;
+    layer_count++;
     $$ = ast;
     //auto stmt = unique_ptr<string>($2);
     //$$ = new string("{ " + *stmt + " }");
@@ -142,7 +151,7 @@ BlockItem
     ast->item = unique_ptr<BaseAST>($1);
     $$ = ast;
   }
-  | Stmt {
+  | /*Stmt*/ IfStmt {
     auto ast = new BlockItemAST();
     ast->item = unique_ptr<BaseAST>($1);
     $$ = ast;
@@ -283,6 +292,61 @@ LVal
   }
   ;
 
+// lv6增加的对if语句的支持
+IfStmt
+  : IfOpenStmt {
+    auto ast = new IfStmtAST();
+    ast->ifstmt = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  | IfCloseStmt {
+    auto ast = new IfStmtAST();
+    ast->ifstmt = unique_ptr<BaseAST>($1);
+    $$ = ast;
+  }
+  ;
+
+IfOpenStmt
+  : IF '(' Exp ')' IfStmt {
+    auto ast = new IfOpenStmtAST();
+    ast->judge = unique_ptr<BaseAST>($3);
+    ast->t_jump = unique_ptr<BaseAST>($5);
+    ast->ast_state = 1;
+    ast->place = if_counter;
+    if_counter++;
+    $$ = ast;
+  }
+  | IF '(' Exp ')' IfCloseStmt ELSE IfOpenStmt {
+    auto ast = new IfOpenStmtAST();
+    ast->judge = unique_ptr<BaseAST>($3);
+    ast->t_jump = unique_ptr<BaseAST>($5);
+    ast->f_jump = unique_ptr<BaseAST>($7);
+    ast->ast_state = 0;
+    ast->place = if_counter;
+    if_counter++;
+    $$ = ast;
+  }
+  ;
+
+IfCloseStmt
+  : Stmt {
+    auto ast = new IfCloseStmtAST();
+    ast->t_jump = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | IF '(' Exp ')' IfCloseStmt ELSE IfCloseStmt {
+    auto ast = new IfCloseStmtAST();
+    ast->judge = unique_ptr<BaseAST>($3);
+    ast->t_jump = unique_ptr<BaseAST>($5);
+    ast->f_jump = unique_ptr<BaseAST>($7);
+    ast->ast_state = 0;
+    ast->place = if_counter;
+    if_counter++;
+    $$ = ast;
+  }
+  ;
+
 // lv5增加Stmt的[Exp];和Block两种分支
 Stmt
   : LVal '=' Exp ';' {
@@ -358,6 +422,9 @@ LOrExp
     exp_counter++;
     ast->place3 = exp_counter;
     exp_counter++;
+    /*申请一个分支跳转标识符*/
+    ast->lor_place = if_counter;
+    if_counter++;
     $$ = ast;
   }
   ;
@@ -390,6 +457,9 @@ LAndExp
     exp_counter++;
     ast->place3 = exp_counter;
     exp_counter++;
+    /*申请分支跳转标识符*/
+    ast->land_place = if_counter;
+    if_counter++;
     $$ = ast;
   }
   ;

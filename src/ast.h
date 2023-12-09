@@ -9,6 +9,7 @@
 # include <unordered_map> // 记录const情况用
 # include <iostream>
 # include <assert.h>
+# include <limits.h> // 获取正无穷大
 // # include <vector> // 接不定长参数用的
 
 // 尝试定义新的类型, 用于承接变量的信息
@@ -67,10 +68,13 @@ class FuncDefAST : public BaseAST {
     //block->Dump();
     //std::cout << " }";
     // layer值向下传递
-    block->layer = layer;
+    // block->layer = layer;
     return "fun @" + ident + "(): " + func_type->Dump() + "{\n\%entry:\n" + block->Dump() + "}\n";
   }
-  int GetValue() const override {block->layer = layer; return block->GetValue();}
+  int GetValue() const override {
+    // block->layer = layer; 
+    return block->GetValue();
+  }
 };
 
 // 这个是必要的
@@ -97,9 +101,6 @@ class BlockAST : public BaseAST {
     std::string Dump() const override{
         std::string get_str;
         blocklist->layer = layer;
-        //std::cout << "BlockAST {";
-        //stmt->Dump();
-        //std::cout << "}";
         get_str = blocklist->Dump();
         // 遍历var_map, 清空该层的所有ident记录
         auto it = var_map.begin();
@@ -122,12 +123,23 @@ class BlockListAST : public BaseAST {
         if (ast_state==0) {
             blocklist->layer = layer;
             item->layer = layer;
-            return blocklist->Dump() + item->Dump();
+            // 添加对于list return后续的语句解读的截断
+            // return blocklist->Dump() + item->Dump();
+            if (blocklist->GetUpward()=="return") return blocklist->Dump();
+            else return blocklist->Dump() + item->Dump();
         }
         else if (ast_state==1) return "";
         else return "";
     }
-    std::string GetUpward() const override {return "";}
+    std::string GetUpward() const override {
+        if (ast_state==0) {
+            // 传递return信息
+            if(item->GetUpward()=="return" || blocklist->GetUpward()=="return") return "return";
+            else return "";
+        }
+        else if (ast_state==1) return "";
+        else return "";
+    }
     int GetValue() const override {return 0;}
 };
 
@@ -323,33 +335,26 @@ class LValAST : public BaseAST {
     std::string ident;
     int place; // 表明变量占用的临时符号
     // 根据ident搜索变量信息的函数
+    // 注意: 这里存在一个暂时无法解决的bug
+    // 目前不修, 似乎不影响过样例
     varinfo IdentSearch() const {
         varinfo curr_info;
-        int check_layer = -1;
+        // int check_layer = -1;
+        int check_layer = INT_MAX;
         for (auto it=var_map.begin();it!=var_map.end();++it) {
             if (it->second.ident==ident) {
-                if (it->second.layer>check_layer) {
+                // if (it->second.layer>check_layer) {
+                if (it->second.layer<check_layer) {
                     curr_info = it->second;
                     check_layer = it->second.layer;
                 }
             }
         }
-        if (check_layer<0) {std::cout << ident << " not found!"; return curr_info;} // 找不到就报错
+        std::cout << curr_info.ident << "\n";
+        if (check_layer==INT_MAX) {std::cout << ident << " not found!\n"; return curr_info;} // 找不到就报错
         else return curr_info;
     }
     std::string Dump() const override {
-        /*
-        if (var_map.find(ident)==var_map.end()) return "";
-        else {
-            if (var_map[ident].vartype==0) return "";
-            else if (var_map[ident].vartype==1) {
-                if (fromup=="stmt") return "";
-                else if (fromup=="exp") return " %"+std::to_string(place)+" = load "+var_map[ident].name+"\n";
-                else return "";
-            }
-            else return "";
-        }
-        */
         varinfo found = IdentSearch();
         if (found.vartype==0) return "";
         else if (found.vartype==1) {
@@ -360,22 +365,6 @@ class LValAST : public BaseAST {
         else return "";
     }
     std::string GetUpward() const override {
-        // 把值从map中取出来应该放在这个位置
-        // if (const_map.find(ident)==const_map.end()) std::cout << "not found!";
-        // else std::cout << "found!";
-        // return std::to_string(var_map[ident]);
-        /*
-        if (var_map.find(ident)==var_map.end()) return "";
-        else {
-            if (var_map[ident].vartype==0) return std::to_string(var_map[ident].value);
-            else if (var_map[ident].vartype==1) {
-                if (fromup=="stmt") return var_map[ident].name;
-                else if (fromup=="exp") return "%"+std::to_string(place); 
-                else return "";
-            }
-            else return "";
-        }
-        */
         varinfo found = IdentSearch();
         if (found.vartype==0) return std::to_string(found.value);
         else if (found.vartype==1) {
@@ -386,18 +375,143 @@ class LValAST : public BaseAST {
         else return "";
     }
     int GetValue() const override {
-        // return var_map[ident];
-        /*
-        if (var_map.find(ident)==var_map.end()) return 0;
-        else {
-            if (var_map[ident].vartype==0) return var_map[ident].value;
-            else if (var_map[ident].vartype==1) return 0;
-            else return 0;
-        }
-        */
         varinfo found = IdentSearch();
         if (found.vartype==0) return found.value;
         else if (found.vartype==1) return 0;
+        else return 0;
+    }
+};
+
+// lv6: 添加对于if语句的支持
+class IfStmtAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> ifstmt;
+    std::string Dump() const override {ifstmt->layer = layer; return ifstmt->Dump();}
+    std::string GetUpward() const override {ifstmt->layer = layer; return ifstmt->GetUpward();} // 传递return信息
+    int GetValue() const override {ifstmt->layer = layer; return ifstmt->GetValue();}
+};
+
+class IfOpenStmtAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> judge;
+    std::unique_ptr<BaseAST> t_jump;
+    std::unique_ptr<BaseAST> f_jump;
+    int ast_state;
+    int place; // if语句的编号
+    std::string Dump() const override {
+        std::string get_str;
+        std::string then_str = "\%then_" + std::to_string(place);
+        std::string end_str = "\%end_" + std::to_string(place);
+        if (ast_state==0) {
+            judge->layer = layer;
+            t_jump->layer = layer;
+            f_jump->layer = layer;
+            std::string else_str = "\%else_" + std::to_string(place);
+            get_str += judge->Dump();
+            // 分支跳转指令
+            get_str += "  br " + judge->GetUpward() + ", " + then_str + ", " + else_str + "\n\n";
+            // then分支(放弃下述优化)
+            // 修正: 如果分支中以ret句子结尾(这里暂时实现为存在ret句), 不进行跳转语句的生成
+            // get_str += then_str + ":\n" + t_jump->Dump() + "  jump " + end_str + "\n\n";
+            get_str += then_str + ":\n" + t_jump->Dump();
+            if (t_jump->GetUpward()=="return") get_str += "\n";
+            else get_str += "  jump " + end_str + "\n\n";
+            // else分支
+            // 做与then分支相似的修正(放弃优化)
+            // get_str += else_str + ":\n" + f_jump->Dump() + "  jump " + end_str + "\n\n";
+            get_str += else_str + ":\n" + f_jump->Dump();
+            if (f_jump->GetUpward()=="return") get_str += "\n";
+            else get_str += "  jump " + end_str + "\n\n";
+            // 开end分支
+            // get_str += end_str + ":\n";
+            // 修正: 如果then和else分支都出现了ret, 那么就不需要继续生成代码了(暂时放弃这个修改)
+            if (!(t_jump->GetUpward()=="return" && f_jump->GetUpward()=="return")) get_str += end_str + ":\n";
+            return get_str;
+        }
+        else if (ast_state==1) {
+            judge->layer = layer;
+            t_jump->layer = layer;
+            get_str += judge->Dump();
+            // 分支跳转指令
+            get_str += "  br " + judge->GetUpward() + ", " + then_str + ", " + end_str + "\n\n";
+            // then分支(放弃优化)
+            // 修正: 如果分支中以ret句子结尾(这里暂时实现为存在ret句), 不进行跳转语句的生成
+            // get_str += then_str + ":\n" + t_jump->Dump() + "  jump " + end_str + "\n\n";
+            get_str += then_str + ":\n" + t_jump->Dump();
+            if (t_jump->GetUpward()=="return") get_str += "\n";
+            else get_str += "  jump " + end_str + "\n\n";
+            // 开end分支
+            // 修正: 如果then分支出现了ret那么不需要继续生成代码了(戳啦!)
+            get_str += end_str + ":\n";
+            // if (t_jump->Dump().find("ret")==std::string::npos) get_str += end_str + ":\n";
+            return get_str;
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) {
+            // 传递return信息
+            if (t_jump->GetUpward()=="return" && f_jump->GetUpward()=="return") return "return";
+            else return "";
+        }
+        else if (ast_state==1) return "";
+        else return "";
+    }
+    int GetValue() const override {return 0;}
+};
+
+class IfCloseStmtAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> judge;
+    std::unique_ptr<BaseAST> t_jump;
+    std::unique_ptr<BaseAST> f_jump;
+    int ast_state;  // 状态0是close的if语句, 状态1连接到Stmt
+    int place; // if语句的编号
+    std::string Dump() const override {
+        if (ast_state==0) {
+            judge->layer = layer;
+            t_jump->layer = layer;
+            f_jump->layer = layer;
+            std::string get_str;
+            std::string then_str = "\%then_" + std::to_string(place);
+            std::string end_str = "\%end_" + std::to_string(place);
+            std::string else_str = "\%else_" + std::to_string(place);
+            get_str += judge->Dump();
+            // 分支跳转指令
+            get_str += "  br " + judge->GetUpward() + ", " + then_str + ", " + else_str + "\n\n";
+            // then分支(放弃优化)
+            // 修正: 如果分支中以ret句子结尾(这里暂时实现为存在ret句), 不进行跳转语句的生成
+            // get_str += then_str + ":\n" + t_jump->Dump() + "  jump " + end_str + "\n\n";
+            get_str += then_str + ":\n" + t_jump->Dump();
+            if (t_jump->GetUpward()=="return") get_str += "\n";
+            else get_str += "  jump " + end_str + "\n\n";
+            // else分支(放弃优化)
+            // 修正: 如果分支中以ret句子结尾(这里暂时实现为存在ret句), 不进行跳转语句的生成
+            // get_str += else_str + ":\n" + f_jump->Dump() + "  jump " + end_str + "\n\n";
+            get_str += else_str + ":\n" + f_jump->Dump();
+            if (f_jump->GetUpward()=="return") get_str += "\n";
+            else get_str += "  jump " + end_str + "\n\n";
+            // 开end分支
+            // 修正: 如果then和else分支都出现了ret, 那么就不需要继续生成代码了(放弃这个改动)
+            // get_str += end_str + ":\n";
+            if (!(t_jump->GetUpward()=="return" && f_jump->GetUpward()=="return")) get_str += end_str + ":\n";
+            return get_str;
+        }
+        else if (ast_state==1) {t_jump->layer = layer; return t_jump->Dump();} // 直接往上传
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) {
+            // 传递return信息
+            if (t_jump->GetUpward()=="return" && f_jump->GetUpward()=="return") return "return";
+            else return "";
+        }
+        else if (ast_state==1) {t_jump->layer = layer; return t_jump->GetUpward();}  // 传递return信息
+        else return "";
+    }
+    int GetValue() const override {
+        if (ast_state==0) return 0;
+        else if (ast_state==1) {t_jump->layer = layer; return t_jump->GetValue();}
         else return 0;
     }
 };
@@ -409,15 +523,19 @@ class StmtAST : public BaseAST {
     std::unique_ptr<BaseAST> expression;
     int ast_state;  // 0表示return语句, 1表示赋值语句, 2表示单纯求值语句(得扔), 3表示新的block
     std::string GetUpward() const override {
-        if (ast_state==0) return expression->GetUpward();
+        if (ast_state==0) // return expression->GetUpward(); 
+        {
+            // 尝试传递return信息用于后续计算
+            return "return";
+        }
         else if (ast_state==1) {
             lval->fromup = "stmt"; // 表明为表达式左值
             return lval->GetUpward();
         }
-        else if (ast_state==2) return expression->GetUpward();
+        else if (ast_state==2) return ""; // 副作用表达式不传递信息
         else if (ast_state==3) {
             // 出现了新的block, layer+1
-            expression->layer = layer + 1;
+            // expression->layer = layer + 1;
             return expression->GetUpward();
         }
         else return "";
@@ -439,7 +557,7 @@ class StmtAST : public BaseAST {
         }
         else if (ast_state==2) return expression->Dump();
         else if (ast_state==3) {
-            expression->layer = layer + 1;
+            // expression->layer = layer + 1;
             return expression->Dump();
         }
         else return "";
@@ -452,7 +570,7 @@ class StmtAST : public BaseAST {
         }
         else if (ast_state==2) return expression->GetValue();
         else if (ast_state==3) {
-            expression->layer = layer + 1;
+            // expression->layer = layer + 1;
             return expression->GetValue();
         }
         else return 0;
@@ -497,6 +615,7 @@ class LOrExpAST :public BaseAST {
     std::unique_ptr<BaseAST> land;
     // 在状态1下需要申请3个place
     int place1, place2, place3;
+    int lor_place; // 分支基本块所使用的编号
     int ast_state;
     std::string Dump() const override {
         // 情况和LAnd差不太多
@@ -506,13 +625,41 @@ class LOrExpAST :public BaseAST {
         // 需要申请3个place
         if (ast_state==0) {
             if (op->GetUpward()=="||") {
+                // 实现短路求值, 修改实现方式
                 std::string get_str = "";
+                std::string r_block = "\%lor_right_" + std::to_string(lor_place);
+                std::string zero_block = "\%lor_zero_" + std::to_string(lor_place);
+                std::string one_block = "\%lor_one_" + std::to_string(lor_place);
+                std::string successor_block = "\%lor_suc_" + std::to_string(lor_place);
                 // 第一个ne运算
-                get_str += lor->Dump()+"  %" + std::to_string(place1) + " = ne 0, "+lor->GetUpward()+"\n";
+                // get_str += lor->Dump()+"  %" + std::to_string(place1) + " = ne 0, "+lor->GetUpward()+"\n";
                 // 第二个ne运算
-                get_str += land->Dump()+"  %" + std::to_string(place2) + " = ne 0, "+land->GetUpward()+"\n";
+                // get_str += land->Dump()+"  %" + std::to_string(place2) + " = ne 0, "+land->GetUpward()+"\n";
                 // 按位或运算
-                get_str += "  %" + std::to_string(place3) + " = or"+" %" + std::to_string(place1)+","+" %" + std::to_string(place2) + "\n";
+                // get_str += "  %" + std::to_string(place3) + " = or"+" %" + std::to_string(place1)+","+" %" + std::to_string(place2) + "\n";
+                // 申存, 用于赋值
+                get_str += "  %" + std::to_string(place1) + " = alloc i32\n";
+                // 先考虑左值
+                get_str += lor->Dump(); // 左值的运算过程
+                get_str += "  br " + lor->GetUpward() + ", " + one_block + ", " + r_block + "\n\n";
+                // 然后考虑右值
+                // 新开基本块
+                get_str += r_block + ":\n";
+                get_str += land->Dump();
+                get_str += "  br " + land->GetUpward() + ", " + one_block + ", " + zero_block + "\n\n";
+                // 考虑0后续 请考虑如何给语句标号赋值？
+                get_str += zero_block + ":\n";
+                // get_str += "  %" + std::to_string(place3) + " = add 0, 1\n";
+                get_str += "  store 0,  %" + std::to_string(place1) + "\n";
+                get_str += "  jump " + successor_block + "\n\n";
+                // 考虑1后续
+                get_str += one_block + ":\n";
+                // get_str += "  %" + std::to_string(place3) + " = add 0, 0\n";
+                get_str += "  store 1, %" + std::to_string(place1) + "\n";
+                get_str += "  jump " + successor_block + "\n\n";
+                // 考虑后继
+                get_str += successor_block + ":\n";
+                get_str += "  %" + std::to_string(place3) + " = load" + " %" + std::to_string(place1) + "\n";
                 return get_str;
             }
             else return "";
@@ -551,21 +698,51 @@ class LAndExpAST : public BaseAST {
     // 在状态1下需要申请3个place
     int place1, place2, place3;
     int ast_state;
+    int land_place;
     std::string Dump() const override {
         // 请注意, koopa IR只提供了按位与按位或运算, 需要运算的转换
         // 转换方法
         // 先用2次ne运算, 若为0保持0, 若不为0转换为1
         // 再用and运算, 对0/1做按位与(逻辑与)
         // 需要申请3个place
+        // 实现短路求值, 修改实现方式
+        std::string r_block = "\%land_right_" + std::to_string(land_place);
+        std::string zero_block = "\%land_zero_" + std::to_string(land_place);
+        std::string one_block = "\%land_one_" + std::to_string(land_place);
+        std::string successor_block = "\%land_suc_" + std::to_string(land_place);
         if (ast_state==0) {
             if (op->GetUpward()=="&&") {
                 std::string get_str = "";
+                /*
                 // 第一个ne运算, 包括预备的运算(也许可以短路求值?)
                 get_str += land->Dump()+"  %" + std::to_string(place1) + " = ne 0, " + land->GetUpward() + "\n";
                 // 第二个ne运算, 包括预备的运算
                 get_str += eq->Dump()+"  %" + std::to_string(place2) + " = ne 0, " + eq->GetUpward()+"\n";
                 // 做按位与运算
                 get_str += " %" + std::to_string(place3) + " = and" +" %" + std::to_string(place1) + "," + " %" + std::to_string(place2) + "\n";
+                */
+                // 申存, 用于赋值
+                get_str += "  %" + std::to_string(place1) + " = alloc i32\n";
+                // 考虑左值
+                get_str += land->Dump();
+                get_str += "  br " + land->GetUpward() + ", " + r_block + ", " + zero_block + "\n\n";
+                // 考虑右值
+                get_str += r_block + ":\n";
+                get_str += eq->Dump();
+                get_str += "  br " + eq->GetUpward() + ", " + one_block + ", " + zero_block + "\n\n";
+                // 考虑0后续
+                get_str += zero_block + ":\n";
+                // get_str += " %" + std::to_string(place3) + " = add 0, 0\n";
+                get_str += "  store 0, %" + std::to_string(place1) + "\n";
+                get_str += "  jump " + successor_block + "\n\n";
+                // 考虑1后续
+                get_str += one_block + ":\n";
+                // get_str += " %" + std::to_string(place3) + " = add 0, 1\n";
+                get_str += "  store 1, %" + std::to_string(place1) + "\n";
+                get_str += "  jump " + successor_block + "\n\n";
+                // 考虑后继
+                get_str += successor_block + ":\n";
+                get_str += "  %" + std::to_string(place3) + " = load" + "  %" + std::to_string(place1) + "\n";
                 return get_str;
             }
             else return "";
@@ -813,9 +990,7 @@ class PrimaryExpAST : public BaseAST {
     std::unique_ptr<BaseAST> son_tree;
     int ast_state;  // 0表示为number or exp, 1表示lval
     // 将子树的upward直接上传
-    // upward = son_tree->upward;
     std::string GetUpward() const override {
-        // return son_tree->GetUpward();
         if (ast_state==0) return son_tree->GetUpward();
         else if (ast_state==1) {
             son_tree->fromup = "exp"; // 表明为表达式右值
@@ -825,7 +1000,6 @@ class PrimaryExpAST : public BaseAST {
     };
     std::string Dump() const override {
         // 保留子孙的dump结果不变
-        // return son_tree->Dump();
         if (ast_state==0) return son_tree->Dump();
         else if (ast_state==1) {
             son_tree->fromup = "exp"; // 表明为表达式右值

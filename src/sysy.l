@@ -35,6 +35,8 @@ Hexadecimal 0[xX][0-9a-fA-F]*
 "int" {return INT;}
 "const" {return CONST;}
 "return" {return RETURN;}
+"if" {return IF;}
+"else" {return ELSE;}
 {Identifier} {yylval.str_val = new string(yytext); return IDENT;}
 {LOrOp} {yylval.str_val = new string(yytext); return LOR_CONST;}
 {LAndOp} {yylval.str_val = new string(yytext); return LAND_CONST;}
