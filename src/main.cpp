@@ -10,6 +10,7 @@
 #include "koopa.h" // 引用koopa头文件
 #include <unordered_map> // 用unordered_map类型存已经分配了的内存
 #include <cmath> // 引入绝对值函数
+#include <stack>
 
 using namespace std;
 
@@ -29,6 +30,8 @@ extern int yyparse(unique_ptr<BaseAST> &ast);
 
 // 保存常量名称-值对, 用于编译期间求值
 unordered_map<std::string, varinfo> var_map;
+// while栈, 用于转换
+stack<int> while_stack;
 
 // 声明0号寄存器名称
 const string ZERO_REGISTER = "x0";

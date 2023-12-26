@@ -23,6 +23,8 @@ int if_counter = 0;
 // lv5增加Stmt的第一层常数
 // const int FIRST_LAYER = 1;
 int layer_count = 1;
+// lv7增加的对while语句的计数
+int while_counter = 0;
 
 %}
 
@@ -47,6 +49,8 @@ int layer_count = 1;
 // 添加关键字CONST(const)
 // lv6添加关键字IF ELSE
 %token INT RETURN CONST IF ELSE
+// lv7添加关键字WHILE BREAK CONTINUE
+%token WHILE BREAK CONTINUE
 // 尝试添加 str_val EQ_CONST REL_CONST
 %token <str_val> IDENT EQ_CONST REL_CONST LAND_CONST LOR_CONST
 // 试图将Number token 的类型调整为int_val, 不行, 还是要作为ast_val
@@ -356,6 +360,16 @@ Stmt
     ast->ast_state = 1;
     $$ = ast;
   }
+  | BREAK ';' {
+    auto ast = new StmtAST();
+    ast->ast_state = 5;
+    $$ = ast;
+  }
+  | CONTINUE ';' {
+    auto ast = new StmtAST();
+    ast->ast_state = 6;
+    $$ = ast;
+  }
   | SideExp {
     auto ast = new StmtAST();
     ast->expression = unique_ptr<BaseAST>($1);
@@ -366,6 +380,16 @@ Stmt
     auto ast = new StmtAST();
     ast->expression = unique_ptr<BaseAST>($1);
     ast->ast_state = 3;
+    $$ = ast;
+  }
+  | WHILE '(' Exp ')' Stmt {
+    auto ast = new StmtAST();
+    ast->expression = unique_ptr<BaseAST>($3);
+    ast->statement = unique_ptr<BaseAST>($5);
+    ast->ast_state = 4;
+    /*申请一个while_place*/
+    ast->while_place = while_counter;
+    while_counter++; // 自增
     $$ = ast;
   }
   | RETURN Exp ';' {

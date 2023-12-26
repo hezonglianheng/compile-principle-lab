@@ -1,7 +1,7 @@
 # ifndef AST_H
 # define AST_H
 # pragma once //只引用一次
-// todo: IR生成代码(试图输出string)
+// todo: if各个语句中对于break和continue的调整
 
 # include <memory>
 # include <string>
@@ -10,6 +10,7 @@
 # include <iostream>
 # include <assert.h>
 # include <limits.h> // 获取正无穷大
+# include <stack>
 // # include <vector> // 接不定长参数用的
 
 // 尝试定义新的类型, 用于承接变量的信息
@@ -23,6 +24,8 @@ struct varinfo {
 
 // 记录const及其值的map
 extern std::unordered_map<std::string, varinfo> var_map;
+// 记录while情形的stack
+extern std::stack<int> while_stack;
 
 class BaseAST {
     public:
@@ -521,7 +524,10 @@ class StmtAST : public BaseAST {
     std::string word;
     std::unique_ptr<BaseAST> lval;
     std::unique_ptr<BaseAST> expression;
+    std::unique_ptr<BaseAST> statement;
     int ast_state;  // 0表示return语句, 1表示赋值语句, 2表示单纯求值语句(得扔), 3表示新的block
+    // 4表示while语句, 5表示break语句, 6表示continue语句
+    int while_place; // while的位置
     std::string GetUpward() const override {
         if (ast_state==0) // return expression->GetUpward(); 
         {
@@ -538,6 +544,9 @@ class StmtAST : public BaseAST {
             // expression->layer = layer + 1;
             return expression->GetUpward();
         }
+        else if (ast_state==4) return expression->GetUpward();
+        else if (ast_state==5) /*return "break";*/ return "return";
+        else if (ast_state==6) /*return "continue";*/ return "return";
         else return "";
     }
     std::string Dump() const override {
@@ -560,6 +569,53 @@ class StmtAST : public BaseAST {
             // expression->layer = layer + 1;
             return expression->Dump();
         }
+        else if (ast_state==4) {
+            // todo: 设计while语句的Dump函数
+            std::string get_str = "";
+            // entry块的名字
+            std::string entry_str = "\%while_entry_" + std::to_string(while_place);
+            // body块的名字
+            std::string body_str = "\%while_body_" + std::to_string(while_place);
+            // end块的名字
+            std::string end_str = "\%while_end_" + std::to_string(while_place);
+            // place入栈
+            while_stack.push(while_place);
+            // 跳入while_entry
+            get_str += "  jump " + entry_str + "\n\n";
+            // while_entry
+            get_str += entry_str + ":\n";
+            get_str += expression->Dump();
+            get_str += "  br " + expression->GetUpward() + ", " + body_str + ", " + end_str + "\n\n";
+            // while_body
+            get_str += body_str + ":\n";
+            get_str += statement->Dump();
+            if (statement->GetUpward()=="return");
+            else if (statement->GetUpward()=="break");
+            else if (statement->GetUpward()=="continue");
+            else get_str += "  jump " + entry_str + "\n";
+            get_str += "\n";
+            // while_end开头
+            get_str += end_str + ":\n";
+            // place出栈
+            while_stack.pop();
+            return get_str;
+        }
+        // break语句生成koopa
+        else if (ast_state==5) {
+            if (while_stack.empty()) assert(false);
+            else {
+                int curr_while_place = while_stack.top();
+                return "  jump \%while_end_" + std::to_string(curr_while_place) + "\n";
+            }
+        }
+        // continue语句生成koopa
+        else if (ast_state==6) {
+            if (while_stack.empty()) assert(false);
+            else {
+                int curr_while_place = while_stack.top();
+                return "  jump \%while_entry_" + std::to_string(curr_while_place) + "\n";
+            }
+        }
         else return "";
     };
     int GetValue() const override {
@@ -573,6 +629,9 @@ class StmtAST : public BaseAST {
             // expression->layer = layer + 1;
             return expression->GetValue();
         }
+        else if (ast_state==4) return expression->GetValue();
+        else if (ast_state==5) return 0;
+        else if (ast_state==6) return 0;
         else return 0;
     }
 };
