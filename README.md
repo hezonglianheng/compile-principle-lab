@@ -12,6 +12,7 @@
 - 2023.12.5 通过lv5
 - 2023.12.9 通过lv6
 - 2023.12.26 通过lv7
+- 2024.01.04 通过lv8.1
 
 ## 一些笔记
 - 本实践课作业的说明文档存在一些typo
@@ -120,3 +121,19 @@ expr : expr '+' expr
 因此，在设计语法时，你需要考虑产生式的顺序以确保正确的解析结果。如果你想要改变优先级或者结合性，你可以通过重新排列产生式来实现。
 
 对于语句`break;`和`continue;`, 情况是类似的. 需要设计单独的符号或者安排语句的顺序问题, 使得`break;`和`continue;`不会被解析为`Exp`.
+
+# 有关类型问题
+在SysY语言规范中, 关于类型有如下定义:
+```ebnf
+Decl          ::= ConstDecl | VarDecl;
+ConstDecl     ::= "const" BType ConstDef {"," ConstDef} ";";
+BType         ::= "int";
+ConstDef      ::= IDENT {"[" ConstExp "]"} "=" ConstInitVal;
+VarDef        ::= IDENT {"[" ConstExp "]"}
+                | IDENT {"[" ConstExp "]"} "=" InitVal;
+FuncDef       ::= FuncType IDENT "(" [FuncFParams] ")" Block;
+FuncType      ::= "void" | "int";
+FuncFParams   ::= FuncFParam {"," FuncFParam};
+FuncFParam    ::= BType IDENT ["[" "]" {"[" ConstExp "]"}];
+```
+由于`int`可以被规约为`BType`和`FuncType`两种类型, 因此会发生归约-归约冲突. 因此自行实现时, 需要取消这两种类型, 而直接书写函数定义/全局变量定义的表达式.

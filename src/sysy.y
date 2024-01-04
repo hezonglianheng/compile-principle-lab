@@ -25,6 +25,8 @@ int if_counter = 0;
 int layer_count = 1;
 // lv7增加的对while语句的计数
 int while_counter = 0;
+// lv8增加的对编译单元的计数
+int unit_counter = 0;
 
 %}
 
@@ -48,7 +50,8 @@ int while_counter = 0;
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 // 添加关键字CONST(const)
 // lv6添加关键字IF ELSE
-%token INT RETURN CONST IF ELSE
+// lv8添加关键字VOID
+%token INT RETURN CONST IF ELSE VOID
 // lv7添加关键字WHILE BREAK CONTINUE
 %token WHILE BREAK CONTINUE
 // 尝试添加 str_val EQ_CONST REL_CONST
@@ -57,15 +60,17 @@ int while_counter = 0;
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp RelExp RelOp EqExp EqOp LAndExp LAndOp LOrExp LOrOp
+%type <ast_val> FuncDef Block Stmt Number Exp AddExp MulExp UnaryExp PrimaryExp RelExp RelOp EqExp EqOp LAndExp LAndOp LOrExp LOrOp
 // lv4定义一批新的类型
-%type <ast_val> Decl ConstDecl BType ConstDef ConstInitVal BlockItem LVal ConstExp VarDecl VarDef InitVal 
+%type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem LVal ConstExp VarDecl VarDef InitVal 
 // 尝试定义类型ConstList BlockList VarList
 %type <ast_val> ConstList BlockList VarList
 // lv5定义新类型
 %type <ast_val> SideExp
 // lv6定义新类型IfStmt IfOpenStmt IfCloseStmt
 %type <ast_val> IfStmt IfOpenStmt IfCloseStmt
+// lv8定义新类型
+%type <ast_val> FuncFParams FuncFParam FuncRParams CompItem CompList
 
 %%
 
@@ -74,11 +79,44 @@ int while_counter = 0;
 // 而 parser 一旦解析完 CompUnit, 就说明所有的 token 都被解析了, 即解析结束了
 // 此时我们应该把 FuncDef 返回的结果收集起来, 作为 AST 传给调用 parser 的函数
 // $1 指代规则里第一个符号的返回值, 也就是 FuncDef 的返回值
+
 CompUnit
-  : FuncDef {
+  : CompList {
     auto comp_unit = make_unique<CompUnitAST>();
-    comp_unit->func_def = unique_ptr<BaseAST>($1);
+    comp_unit->complist = unique_ptr<BaseAST>($1);
     ast = move(comp_unit);
+  }
+  ;
+
+CompList
+  : CompItem {
+    auto ast = new CompListAST();
+    ast->item = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | CompList CompItem {
+    auto ast = new CompListAST();
+    ast->list = unique_ptr<BaseAST>($1);
+    ast->item = unique_ptr<BaseAST>($2);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+// 单独的全局符号
+CompItem
+  : Decl {
+    auto ast = new CompItemAST();
+    ast->content = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | FuncDef {
+    auto ast = new CompItemAST();
+    ast->content = unique_ptr<BaseAST>($1);
+    ast->ast_state = 0;
+    $$ = ast;
   }
   ;
 
@@ -93,23 +131,64 @@ CompUnit
 // 虽然此处你看不出用 unique_ptr 和手动 delete 的区别, 但当我们定义了 AST 之后
 // 这种写法会省下很多内存管理的负担
 FuncDef
-  : FuncType IDENT '(' ')' Block {
+  : INT IDENT '(' ')' Block {
     auto ast = new FuncDefAST();
-    ast->func_type = unique_ptr<BaseAST>($1);
+    ast->func_type = "int";
     ast->ident = *unique_ptr<string>($2);
     ast->block = unique_ptr<BaseAST>($5);
-    // ast->layer = FIRST_LAYER; // 在此处添加层次标记1
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | VOID IDENT '(' ')' Block {
+    auto ast = new FuncDefAST();
+    ast->func_type = "void";
+    ast->ident = *unique_ptr<string>($2);
+    ast->block = unique_ptr<BaseAST>($5);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | INT IDENT '(' FuncFParams ')' Block {
+    auto ast = new FuncDefAST();
+    ast->func_type = "int";
+    ast->ident = *unique_ptr<string>($2);
+    ast->p_list = unique_ptr<BaseAST>($4);
+    ast->block = unique_ptr<BaseAST>($6);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | VOID IDENT '(' FuncFParams ')' Block {
+    auto ast = new FuncDefAST();
+    ast->func_type = "void";
+    ast->ident = *unique_ptr<string>($2);
+    ast->p_list = unique_ptr<BaseAST>($4);
+    ast->block = unique_ptr<BaseAST>($6);
+    ast->ast_state = 1;
     $$ = ast;
   }
   ;
 
-// 同上, 不再解释
-FuncType
-  : INT {
-    auto ast = new FuncTypeAST();
-    ast->func_type = "int";
+FuncFParams
+  : FuncFParam {
+    auto ast = new FuncFParamsAST();
+    ast->param = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
     $$ = ast;
-    //$$ = new string("int");
+  }
+  | FuncFParam ',' FuncFParams {
+    auto ast = new FuncFParamsAST();
+    ast->param = unique_ptr<BaseAST>($1);
+    ast->p_list = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+FuncFParam
+  : INT IDENT {
+    auto ast = new FuncFParamAST();
+    ast->btype = "int";
+    ast->ident = *unique_ptr<string>($2);
+    $$ = ast;
   }
   ;
 
@@ -178,10 +257,10 @@ Decl
 // todo: 解决匹配多个token0次或多次的问题
 // 尝试: 设计新节点, 转换为左递归文法
 ConstDecl 
-  : CONST BType ConstList ';' {
+  : CONST INT ConstList ';' {
     auto ast = new ConstDeclAST();
     ast->word = "const";
-    ast->btype = unique_ptr<BaseAST>($2);
+    ast->btype = "int";
     ast->mylist = unique_ptr<BaseAST>($3);
     // ast->mylist->fromup = unique_ptr<BaseAST>($2);
     $$ = ast;
@@ -189,9 +268,9 @@ ConstDecl
   ;
 
 VarDecl
-  : BType VarList ';' {
+  : INT VarList ';' {
     auto ast = new VarDeclAST();
-    ast->btype = unique_ptr<BaseAST>($1);
+    ast->btype = "int";
     ast->mylist = unique_ptr<BaseAST>($2);
     $$ = ast;
   }
@@ -249,14 +328,6 @@ ConstList
     ast->mylist = unique_ptr<BaseAST>($1);
     ast->mydef = unique_ptr<BaseAST>($3);
     ast->ast_state = 0;
-    $$ = ast;
-  }
-  ;
-
-BType 
-  : INT {
-    auto ast = new BTypeAST();
-    ast->btype = "int";
     $$ = ast;
   }
   ;
@@ -625,6 +696,23 @@ UnaryExp
     ast->ast_state = 1;
     $$ = ast;
   }
+  | IDENT '(' ')' {
+    auto ast = new UnaryExpAST();
+    ast->ident = *unique_ptr<string>($1);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 3;
+    $$ = ast;
+  }
+  | IDENT '(' FuncRParams ')' {
+    auto ast = new UnaryExpAST();
+    ast->ident = *unique_ptr<string>($1);
+    ast->son_tree = unique_ptr<BaseAST>($3);
+    ast->place = exp_counter;
+    exp_counter++;
+    ast->ast_state = 2;
+    $$ = ast;
+  }
   | '+' UnaryExp {
     auto ast = new UnaryExpAST();
     ast->op = "+";
@@ -676,15 +764,21 @@ PrimaryExp
   }
   ;
 
-/*
-UnaryOp
-  : STR_CONST {
-    auto ast = new UnaryOpAST();
-    ast->str_const = *unique_ptr<string>($1);
+FuncRParams
+  : Exp {
+    auto ast = new FuncRParamsAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | Exp ',' FuncRParams {
+    auto ast = new FuncRParamsAST();
+    ast->exp = unique_ptr<BaseAST>($1);
+    ast->p_list = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
     $$ = ast;
   }
   ;
-*/
 
 // 接下来还请考虑是否使用Number这个种类的token
 Number

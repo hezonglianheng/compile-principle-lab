@@ -11,6 +11,7 @@
 #include <unordered_map> // 用unordered_map类型存已经分配了的内存
 #include <cmath> // 引入绝对值函数
 #include <stack>
+#include <vector>
 
 using namespace std;
 
@@ -32,11 +33,15 @@ extern int yyparse(unique_ptr<BaseAST> &ast);
 unordered_map<std::string, varinfo> var_map;
 // while栈, 用于转换
 stack<int> while_stack;
+// 记录函数使用的参数信息
+vector<paraminfo> func_param_list;
 
 // 声明0号寄存器名称
 const string ZERO_REGISTER = "x0";
-string registers[15] = {"t0", "t1", "t2", "t3", "t4", "t5", 
-"t6", "a1", "a2", "a3", "a4", "a5", "a6", "a0"};
+// 临时寄存器
+string registers[7] = {"t0", "t1", "t2", "t3", "t4", "t5", "t6"};
+// 参数传递用寄存器
+string params_registers[8] = {"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
 
 // 存放已经分配好的register和指针的关系
 // 暂时废除
@@ -53,6 +58,12 @@ int unused_tag = 0;
 // 表明函数的大小
 // 仅支持一个函数使用, 用完就归零
 int function_size = 0;
+// 函数是否有返回值的记录, 只支持一个函数使用, 用完归零
+int ret_flag = 0;
+// 函数是否调用了另一个函数的记录, 只支持一个函数使用, 用完归零
+int call_flag = 0;
+// 新增函数参数位置的栈帧区域的记录, 只支持一个函数使用, 用完归零
+int param_area = 0;
 
 // 声明Visit函数的用法
 string Visit(const koopa_raw_program_t &program);
@@ -71,12 +82,23 @@ string Visit(const koopa_raw_store_t store);
 string Visit(const koopa_raw_branch_t branch);
 // 增加访问jump跳转指令的函数
 string Visit(const koopa_raw_jump_t jump);
+// 01-03: 增加访问call指令的函数
+string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value);
 // 增加计算函数所用栈空间和基本块所用栈空间的函数
 int CountStackSpace(const koopa_raw_slice_t &slice);
 // 增加计算类型占据栈空间的函数
 // 通过类型判断需要给多大存储空间的函数
 int CountStackSpace(const koopa_raw_type_t type);
+// 移动sp值的函数
 string MoveFuncPointer(int func_size);
+// 计算函数参数占据空间大小的函数
+int CountParams(const koopa_raw_slice_t &slice);
+// 计算单个函数参数占据空间大小的函数
+int CountParams(const koopa_raw_type_t type);
+// 处理函数参数的函数
+string DealFuncParams(const koopa_raw_slice_t &params, int func_size);
+// 处理单个参数的函数
+string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, const koopa_raw_value_t &value);
 
 int main(int argc, const char *argv[]) {
   // 解析命令行参数. 测试脚本/评测平台要求你的编译器能接收如下参数:
@@ -139,16 +161,7 @@ string Visit(const koopa_raw_program_t &program) {
   // 执行一些其他的必要操作
   // todo: 遍历全局变量得到一些信息
   // 遍历全部函数, 得到信息
-  string program_str = "  .text\n";
-  for (size_t i = 0; i < program.funcs.len; ++i){
-    auto ptr = program.funcs.buffer[i];
-    // 断言是function
-    assert(program.funcs.kind==KOOPA_RSIK_FUNCTION);
-    // 重新解释指针的类型
-    auto new_ptr = reinterpret_cast<koopa_raw_function_t>(ptr);
-    string func_name = new_ptr->name;
-    program_str += "  .global " + func_name.substr(1, func_name.length()) + "\n";
-  }
+  string program_str = "";
   // 访问所有全局变量
   string glob_var_str = Visit(program.values);
   // 访问所有函数
@@ -190,39 +203,39 @@ string Visit(const koopa_raw_function_t &func) {
   // 执行一些其他的必要操作
   // 获得函数的名字作为标识符
   string func_name = func->name;
+  // 记录函数是否有返回值
+  // 得使用func->ty->data.function.ret->tag来获得返回值情况
+  switch (func->ty->data.function.ret->tag) {
+    case KOOPA_RTT_INT32:  // 返回类型为int32则有返回
+      ret_flag = 1;
+      break;
+    default: // 否则没有返回
+      ret_flag = 0;
+      break;
+  }
   // get_str用于接住要输出的字符串
-  string get_str = func_name.substr(1, func_name.length()) + ":\n";
+  string get_str = "";
+  // 函数的开头
+  get_str += "  .text\n";
+  get_str += "  .global " + func_name.substr(1, func_name.length()) + "\n";
+  get_str += func_name.substr(1, func_name.length()) + ":\n";
   // 获知需要分配的栈空间情况
   int use_space = CountStackSpace(func->bbs);
-  use_space = use_space%16==0 ? use_space : (use_space / 16 + 1)*16;
+  // 获知本函数参数占用的空间情况
+  use_space += CountStackSpace(func->params);
+  // 加上全函数共用的函数调用相关信息
+  use_space += call_flag + param_area;
+  // 向上取到16的倍数
+  use_space = use_space % 16 == 0 ? use_space : (use_space / 16 + 1)*16;
   function_size = use_space; // 将函数大小记录到全局
+  unused_tag += param_area; // 未使用位置调整到存储调用函数的参数的栈帧位置的上方(?)
   get_str += MoveFuncPointer(-use_space);
+  // 如果调用需要将ra寄存器值保存起来
+  if (call_flag) get_str += "  sw   ra, " + to_string(use_space-4) + "(sp)\n";
+  // 将参数从ax寄存器等地方取出来
+  get_str += DealFuncParams(func->params, function_size);
   // 访问所有基本块
   string blocks_str = Visit(func->bbs);
-  // 检查基本块情况
-  /*
-  if (blocks_str.size() >= 3) {
-    if (blocks_str.substr(blocks_str.size()-3, 3)=="ret"){
-      get_str += blocks_str.substr(0, blocks_str.size()-3);
-      // get_str += "addi sp, sp, " + to_string(use_space) + "\n";
-      if (use_space==0);  // 0的场合不用栈
-      else if (use_space>=2048) {
-        get_str += "  li   " + registers[0] + ", " + to_string(use_space) + "\n";
-        get_str += "  add  sp, sp, " + registers[0] + "\n";
-      }
-      else get_str += "addi sp, sp, " + to_string(use_space) + "\n";
-      get_str += "  ret\n";
-    }
-    else {
-      cout << "no return!";
-      assert(false);
-    }
-  }
-  else {
-  // 否则直接报错
-    cout << "string too short!";
-    assert(false);
-  }*/
   get_str += blocks_str;
   // 返回之前先把栈中标识符记录报销了
   stack_place.clear();
@@ -230,6 +243,11 @@ string Visit(const koopa_raw_function_t &func) {
   unused_tag = 0;
   // 还得报销一个函数大小
   function_size = 0;
+  // 报销函数返回类型信息
+  ret_flag = 0;
+  // 报销与函数调用相关的记录
+  call_flag = 0;
+  param_area = 0;
   // 返回函数的riscv表示形式
   return get_str;
   // return func_name.substr(1, func_name.length()) + ":\n" + blocks_str;
@@ -289,6 +307,10 @@ string Visit(const koopa_raw_value_t &value) {
       // 12-07: 添加类型 无条件跳转 jump
       get_str = Visit(kind.data.jump);
       break;
+    case KOOPA_RVT_CALL:
+      // 01-03: 添加新类型 函数调用 call
+      get_str = Visit(kind.data.call, value);
+      break;
     default:
       // cout << "unknown type";
       // 其他类型暂时遇不到
@@ -300,34 +322,35 @@ string Visit(const koopa_raw_value_t &value) {
 
 string Visit(const koopa_raw_return_t inst){
   string ret_str, get_str = "";
-  // 确定返回值指针
-  koopa_raw_value_t ret_value = inst.value;
-  const auto &kind = ret_value->kind;
-  // 判断指针类型
-  switch (kind.tag)
-  {
-  case KOOPA_RVT_INTEGER:
-    ret_str = Visit(ret_value);
-    get_str += "  li   a0, " + ret_str + "\n";
-    get_str += MoveFuncPointer(function_size);
-    get_str += "  ret\n\n";
-    break;
-  case KOOPA_RVT_BINARY:
-    // ret_str = register_distribution[ret_value];
-    ret_str = to_string(stack_place[ret_value]);
-    get_str += "  lw   a0, " + ret_str + "(sp)\n";
-    get_str += MoveFuncPointer(function_size);
-    get_str += "  ret\n\n";
-    break;
-  case KOOPA_RVT_LOAD:
-    ret_str = to_string(stack_place[ret_value]);
-    get_str += "  lw   a0, " + ret_str + "(sp)\n";
-    get_str += MoveFuncPointer(function_size);
-    get_str += "  ret\n\n";
-    break;
-  default:
-    break;
+  if (ret_flag==1) {
+    // 确定返回值指针
+    koopa_raw_value_t ret_value = inst.value;
+    const auto &kind = ret_value->kind;
+    // 判断指针类型
+    switch (kind.tag)
+    {
+    case KOOPA_RVT_INTEGER:
+      ret_str = Visit(ret_value);
+      get_str += "  li   a0, " + ret_str + "\n";
+      break;
+    case KOOPA_RVT_BINARY:
+      // ret_str = register_distribution[ret_value];
+      ret_str = to_string(stack_place[ret_value]);
+      get_str += "  lw   a0, " + ret_str + "(sp)\n";
+      break;
+    case KOOPA_RVT_LOAD:
+      ret_str = to_string(stack_place[ret_value]);
+      get_str += "  lw   a0, " + ret_str + "(sp)\n";
+      break;
+    default:
+      break;
+    }
   }
+  // 加载ra的值
+  if (call_flag) get_str += "  lw   ra, " + to_string(function_size-4) + "(sp)\n";
+  // 移动sp位置
+  get_str += MoveFuncPointer(function_size);
+  get_str += "  ret\n\n";
   return get_str;
   // string ret_val_str = Visit(ret_value);
   // 暂时在此处实现将立即数0放入a0存储器的操作
@@ -418,6 +441,19 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     // 更新left_str
     left_str = left_reg;
     break;
+  case KOOPA_RVT_CALL:
+    // call指令与binary, load指令情况相仿
+    left_str = to_string(stack_place[inst.lhs]);
+    // 为非0左值分配一个新的寄存器
+    left_reg = registers[register_counter];
+    // 计数器自增
+    register_counter++;
+    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    // 更新reg寄存器
+    reg = left_reg;
+    // 更新left_str
+    left_str = left_reg;
+    break;
   default:
   // 否则报错
     assert(false);
@@ -454,6 +490,17 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     right_str = right_reg;
     break;
   case KOOPA_RVT_LOAD:
+    right_str = to_string(stack_place[inst.rhs]);
+    right_reg = registers[register_counter];
+    register_counter++;
+    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    // 更新right寄存器
+    reg = right_reg;
+    // 更新right_str
+    right_str = right_reg;
+    break;
+  case KOOPA_RVT_CALL:
+    // call指令操作和binary, load相仿
     right_str = to_string(stack_place[inst.rhs]);
     right_reg = registers[register_counter];
     register_counter++;
@@ -555,45 +602,6 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   return get_str;
 }
 
-// 计算栈需要的空间S'
-int CountStackSpace(const koopa_raw_slice_t &slice) {
-  int count_space = 0;
-  koopa_raw_basic_block_t block_ptr;
-  koopa_raw_value_t value_ptr;
-  // cout << slice.len << "\n";
-  for (size_t i = 0; i < slice.len; ++i) {
-    auto ptr = slice.buffer[i];
-    switch (slice.kind) {
-      case KOOPA_RSIK_BASIC_BLOCK:
-        block_ptr = reinterpret_cast<koopa_raw_basic_block_t>(ptr);
-        count_space += CountStackSpace(block_ptr->insts);
-        break;
-      case KOOPA_RSIK_VALUE:
-        value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
-        // 在这个位置尝试阻截branch和jump指令; 不需要这么做
-        count_space += CountStackSpace(value_ptr->ty);
-        break;
-      default:
-      // 其他情况报错
-        cout << "unknown kind!";
-        assert(false);
-        break;
-    }
-  }
-  switch (slice.kind) {
-    case KOOPA_RSIK_BASIC_BLOCK:
-      return count_space;
-      break;
-    case KOOPA_RSIK_VALUE:
-      return count_space;
-      break;
-    default:
-      cout << "problem!";
-      assert(false);
-      break;
-  }
-}
-
 // 访问加载指令
 string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
   string get_str = "";  // 需要返回的操作字符串
@@ -667,7 +675,29 @@ string Visit(const koopa_raw_store_t store) {
     }
     break;
   case KOOPA_RVT_LOAD:
-  // 加载指令的操作?
+    // 加载指令的操作?
+    if (stack_place.find(store.value)==stack_place.end()) {
+      cout << "symbol not defined!";
+      assert(false);
+    }
+    else {
+      value_place = stack_place[store.value];
+      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+    }
+    break;
+  case KOOPA_RVT_CALL:
+    // call指令操作和alloc, load相仿
+    if (stack_place.find(store.value)==stack_place.end()) {
+      cout << "symbol not defined!";
+      assert(false);
+    }
+    else {
+      value_place = stack_place[store.value];
+      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+    }
+    break;
+  case KOOPA_RVT_FUNC_ARG_REF:
+    // 函数参数的场合与上述情况相仿
     if (stack_place.find(store.value)==stack_place.end()) {
       cout << "symbol not defined!";
       assert(false);
@@ -707,27 +737,6 @@ string Visit(const koopa_raw_store_t store) {
   return get_str;
 }
 
-// 通过类型判断需要给多大存储空间的函数
-int CountStackSpace(const koopa_raw_type_t type){
-  int count_space = 0;
-  switch (type->tag) {
-    case KOOPA_RTT_INT32:
-      count_space += 4;
-      break;
-    case KOOPA_RTT_UNIT:
-      // 若为void则分配0-不分配
-      break;
-    case KOOPA_RTT_POINTER:
-      // alloc好像是pointer类型, 注意pointer类型操作
-      count_space += CountStackSpace(type->data.pointer.base);
-      break;
-    default:
-      cout << "unknown value type!";
-      assert(false);
-      break;
-  }
-  return count_space;
-}
 // 访问br(branch)指令的函数
 string Visit(const koopa_raw_branch_t branch) {
   string get_str = "";
@@ -764,6 +773,188 @@ string Visit(const koopa_raw_jump_t jump) {
   return get_str;
 }
 
+// 访问call指令的函数
+string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
+  string get_str = "";
+  string curr_str;
+  const int ceiling = 8; // 表示能够放入寄存器中的最大数量
+  string param_place;
+  int value_place;
+  koopa_raw_value_t value_ptr;
+  // 将函数的参数传入传递参数用的寄存器和栈上
+  for (size_t i = 0; i < call.args.len; ++i) {
+    auto ptr = call.args.buffer[i];
+    switch (call.args.kind)
+    {
+    case KOOPA_RSIK_VALUE:  // 值的情况, 对值做分类
+      value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
+      switch (value_ptr->kind.tag)
+      {
+      case KOOPA_RVT_INTEGER:
+        /* 数字的场合, 将数字直接写入寄存器 */
+        // 确定参数所在的位置
+        // 当i < ceiling时, 参数位于寄存器中, 否则在栈上
+        if (i < ceiling) {
+          param_place = params_registers[i]; // 分配寄存器
+          curr_str = Visit(value_ptr); // 访问数字的值
+          // 生成指令
+          get_str += "  li   " + param_place + ", " + curr_str + "\n";
+        }
+        else {
+          param_place = to_string((i-8)*4) + "(sp)";
+          curr_str = Visit(value_ptr); // 访问数字的值
+          // 生成指令: 放入寄存器和放入栈上
+          get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
+          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+        }
+        break;
+      case KOOPA_RVT_BINARY:
+        /* 二元运算的场合, 查找这个值, 将其加载到传参寄存器中 */
+        if (i < ceiling) {
+          param_place = params_registers[i]; // 分配寄存器
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令
+          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+        }
+        else {
+          param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令: 临时加载和放到栈上
+          get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
+          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+        }
+        break;
+      case KOOPA_RVT_LOAD:
+        /* 加载运算的场合与二元运算场合相仿 */
+        if (i < ceiling) {
+          param_place = params_registers[i]; // 分配寄存器
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令
+          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+        }
+        else {
+          param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令: 临时加载和放到栈上
+          get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
+          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+        }
+        break;
+      case KOOPA_RVT_CALL:
+        /* 函数调用的场合与二元运算场合相仿 */
+        if (i < ceiling) {
+          param_place = params_registers[i]; // 分配寄存器
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令
+          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+        }
+        else {
+          param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
+          curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
+          // 生成指令: 临时加载和放到栈上
+          get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
+          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+        }
+        break;
+      default:
+        break;
+      }
+      break;
+    default:
+      break;
+    }
+  }
+  // 生成call指令, (可能)放入符号表中
+  string func_name = call.callee->name;
+  get_str += "  call " + func_name.substr(1, func_name.length()) + "\n";
+  // 考虑放入符号表中
+  switch (call.callee->ty->data.function.ret->tag)
+  {
+  case KOOPA_RTT_INT32:
+    // 加入stack
+    value_place = unused_tag;
+    stack_place[value] = value_place;
+    // 生成指令, 将返回值放入栈上
+    get_str += "  sw   a0, " + to_string(value_place) + "(sp)\n";
+    unused_tag += CountStackSpace(value->ty);
+    break;
+  default:
+    break;
+  }
+  return get_str;
+}
+
+// 计算栈需要的空间S'
+int CountStackSpace(const koopa_raw_slice_t &slice) {
+  int count_space = 0;
+  int curr_param_space = 0;
+  koopa_raw_basic_block_t block_ptr;
+  koopa_raw_value_t value_ptr;
+  // cout << slice.len << "\n";
+  for (size_t i = 0; i < slice.len; ++i) {
+    auto ptr = slice.buffer[i];
+    switch (slice.kind) {
+      case KOOPA_RSIK_BASIC_BLOCK:
+        block_ptr = reinterpret_cast<koopa_raw_basic_block_t>(ptr);
+        count_space += CountStackSpace(block_ptr->insts);
+        break;
+      case KOOPA_RSIK_VALUE:
+        value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
+        // 调用的场合修改全部全局变量
+        if (value_ptr->kind.tag==KOOPA_RVT_CALL) {
+          call_flag = 4;
+          curr_param_space = CountParams(value_ptr->kind.data.call.args) - 8*4;
+          if (curr_param_space > param_area) param_area = curr_param_space;
+        }
+        count_space += CountStackSpace(value_ptr->ty);
+        break;
+      default:
+        // 其他情况报错
+        cout << "unknown kind!";
+        assert(false);
+        break;
+    }
+  }
+  switch (slice.kind) {
+    case KOOPA_RSIK_BASIC_BLOCK:
+      return count_space;
+      break;
+    case KOOPA_RSIK_VALUE:
+      return count_space;
+      break;
+    default:
+      cout << "problem!";
+      assert(false);
+      break;
+  }
+}
+
+// 通过类型判断需要给多大存储空间的函数
+int CountStackSpace(const koopa_raw_type_t type){
+  int count_space = 0;
+  switch (type->tag) {
+    case KOOPA_RTT_INT32:
+      count_space += 4;
+      break;
+    case KOOPA_RTT_UNIT:
+      // 若为void则分配0-不分配
+      break;
+    case KOOPA_RTT_POINTER:
+      // alloc好像是pointer类型, 注意pointer类型操作
+      count_space += CountStackSpace(type->data.pointer.base);
+      break;
+    case KOOPA_RTT_FUNCTION:
+      // 函数的分配不在这里进行
+      break;
+    default:
+      cout << "unknown value type!";
+      assert(false);
+      break;
+  }
+  // 添加函数计算的结果
+  return count_space;
+}
+
 // 获取移动函数栈指针的操作字符串
 string MoveFuncPointer(int func_size) {
   string get_str = "";
@@ -774,6 +965,88 @@ string MoveFuncPointer(int func_size) {
   else {
     get_str += "  li   " + registers[0] + ", " + to_string(func_size) + "\n";
     get_str += "  add  sp, sp, " + registers[0] + "\n";
+  }
+  return get_str;
+}
+
+// 计算函数参数占据的空间
+int CountParams(const koopa_raw_slice_t &slice) {
+  int s = 0;
+  for (size_t i = 0; i < slice.len; ++i) {
+    auto ptr = slice.buffer[i];
+    switch (slice.kind)
+    {
+    case KOOPA_RSIK_VALUE:
+      // 此时计算单个参数占据的空间
+      s += CountParams(reinterpret_cast<koopa_raw_value_t>(ptr)->ty);
+      break;
+    default:
+      assert(false);
+      break;
+    }
+  }
+  return s;
+}
+
+// 计算单个参数占据的空间大小
+int CountParams(const koopa_raw_type_t type) {
+  int s = 0;
+  // 根据类型计算占据空间大小
+  // integer, binary和load类型都是占据4空间?
+  switch (type->tag)
+  {
+  case KOOPA_RTT_INT32:  // 整数类型+4
+    s += 4;
+    break;
+  default:
+    break;
+  }
+  return s;
+}
+
+// 进入函数时, 处理函数的参数
+string DealFuncParams(const koopa_raw_slice_t &params, int func_size) {
+  string get_str = "";
+  koopa_raw_value_t value_ptr;
+  for (size_t i = 0; i < params.len; ++i) {
+    auto ptr = params.buffer[i];
+    if (params.kind==KOOPA_RSIK_VALUE) {
+      value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
+      get_str += DealFuncParams(value_ptr->ty, func_size, i, value_ptr);
+    }
+    // 否则报错
+    else assert(false);
+  }
+  return get_str;
+}
+
+// 处理单个参数
+string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, const koopa_raw_value_t &value) {
+  const int ceiling = 8;  // 参数寄存器个数
+  const int data_size = 4;
+  string get_str = "";
+  switch (type->tag)
+  {
+  case KOOPA_RTT_INT32:
+    if (rank < ceiling) {
+      // 生成指令
+      get_str += "  sw   " + params_registers[rank] + ", " + to_string(unused_tag) + "(sp)\n";
+      // 压入栈帧
+      stack_place[value] = unused_tag;
+      unused_tag += data_size;
+    }
+    else {
+      // 生成指令
+      int offset = func_size + (rank - ceiling) * data_size;
+      get_str += "  lw   " + registers[0] + ", " + to_string(offset) + "(sp)\n";
+      get_str += "  sw   " + registers[0] + ", " + to_string(unused_tag) + "(sp)\n";
+      // 压入栈帧
+      stack_place[value] = unused_tag;
+      unused_tag += data_size;
+    }
+    break;
+  default:
+    break;
   }
   return get_str;
 }

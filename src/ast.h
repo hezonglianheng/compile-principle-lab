@@ -1,7 +1,7 @@
 # ifndef AST_H
 # define AST_H
 # pragma once //只引用一次
-// todo: if各个语句中对于break和continue的调整
+// todo: 对函数调用的调整
 
 # include <memory>
 # include <string>
@@ -11,21 +11,30 @@
 # include <assert.h>
 # include <limits.h> // 获取正无穷大
 # include <stack>
-// # include <vector> // 接不定长参数用的
+# include <vector> // 制作func_param_list
 
 // 尝试定义新的类型, 用于承接变量的信息
 struct varinfo {
-    int vartype; // 0为const, 1为var
+    int vartype; // 0为const, 1为var, 2为函数?
     std::string ident;  // 变量标号
-    int layer; // 表明ident所属的层级
+    int layer; // 表明ident所属的层级, -1为函数参数变量, -2为全局变量(两个特殊层级)
     int value; // const的计算值
     std::string name;  // 这个是变量名称 这里可能有点问题. 先写着, 报错再说
+    int ret_type; // 0为void(无返回), 1为int(有返回)
+};
+
+struct paraminfo {
+    int paramtype; // 0为普通参数, 1用来处理数组
+    std::string ident;
+    std::string name;
 };
 
 // 记录const及其值的map
 extern std::unordered_map<std::string, varinfo> var_map;
 // 记录while情形的stack
 extern std::stack<int> while_stack;
+// 记录函数使用的参数信息
+extern std::vector<paraminfo> func_param_list;
 
 class BaseAST {
     public:
@@ -39,7 +48,7 @@ class BaseAST {
     // GetUpward是收集数据向上传的函数
     // 有的数据需要上传使用, 用这个函数完成
     virtual std::string GetUpward() const = 0;
-    // GetUpValue是收集数字向上传的函数
+    // GetValue是收集数字向上传的函数
     // 目前用于编译期间计算
     virtual int GetValue() const = 0;
 };
@@ -47,32 +56,114 @@ class BaseAST {
 // CompUnitAST 是 BaseAST
 class CompUnitAST: public BaseAST {
     public:
-    std::unique_ptr<BaseAST> func_def;
+    std::unique_ptr<BaseAST> complist;
+    int ast_state; // 0为多个值, 1为单个值
     std::string GetUpward() const override {return "";}
     std::string Dump() const override{
-    // std::cout << "CompUnitAST { ";
-    return func_def->Dump();
-    // std::cout << " }";
+        std::string get_str;
+        get_str += complist->Dump();
+        return get_str;
     };
-    int GetValue() const override {return func_def->GetValue();}
+    int GetValue() const override {return complist->GetValue();}
+};
+
+class CompListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> list;
+    std::unique_ptr<BaseAST> item;
+    int ast_state; // 0为多个值, 1为单个值
+    std::string Dump() const override {
+        if (ast_state==0) return list->Dump() + "\n" + item->Dump();
+        else if (ast_state==1) return item->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return list->GetUpward() + item->GetUpward();
+        else if (ast_state==1) return item->GetUpward();
+        else return "";
+    }
+    int GetValue() const override {return 0;}
+};
+
+class CompItemAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> content;
+    int ast_state;  // 0为函数, 1为全局变量
+    std::string Dump() const override {return content->Dump();}
+    std::string GetUpward() const override {return content->GetUpward();}
+    int GetValue() const override {return content->GetValue();}
 };
 
 // FuncDef 也是 BaseAST
 class FuncDefAST : public BaseAST {
  public:
-  std::unique_ptr<BaseAST> func_type;
+  std::string func_type;
   std::string ident;
+  std::unique_ptr<BaseAST> p_list;  // 参数列表
   std::unique_ptr<BaseAST> block;
+  int ast_state; // 0为无parameter, 1为有parameter
   std::string GetUpward() const override {return "";}
   std::string Dump() const override {
-    //std::cout << "FuncDefAST { ";
-    //func_type->Dump();
-    //std::cout << ", " << ident << ", ";
-    //block->Dump();
-    //std::cout << " }";
-    // layer值向下传递
-    // block->layer = layer;
-    return "fun @" + ident + "(): " + func_type->Dump() + "{\n\%entry:\n" + block->Dump() + "}\n";
+    std::string get_str = "";
+    // 将函数信息放入符号表(要先放, 尝试支持递归操作)
+    varinfo func_info;
+    std::string name = "@" + ident;
+    func_info.vartype = 2; // 表明为函数
+    func_info.ident = ident; // 函数名称
+    func_info.name = name; // koopa IR中要使用的名称
+    func_info.layer = -2; // 函数是全局量
+    if (func_type=="int") func_info.ret_type = 1;
+    else func_info.ret_type = 0;
+    var_map[name] = func_info; // 将函数信息放入var_map
+    get_str += "fun " + name;
+    // 添加函数参数信息
+    if (ast_state==0) get_str += "()";
+    else if (ast_state==1) get_str += "(" + p_list->Dump() + ")";
+    else get_str += "()";
+    // 函数类型标识
+    if (func_type=="int") get_str += ": i32 ";
+    else get_str += " ";
+    // 函数起始
+    get_str += "{\n\%entry:\n";
+    // 函数变量的依次声明
+    if (ast_state==1) {
+        // 遍历函数变量表
+        for(int i=0;i<func_param_list.size();++i){
+            if (func_param_list[i].paramtype==0) {
+                varinfo newinfo;
+                std::string key = func_param_list[i].ident + "_param";
+                newinfo.ident = func_param_list[i].ident;
+                newinfo.layer = -1; // 表明为函数变量层
+                newinfo.vartype = 1; // 视为变量
+                newinfo.name = "%" + key; // 使用的名字
+                var_map[key] = newinfo; // 放入函数符号表
+                get_str += "  " + newinfo.name + " = alloc i32\n"; // 申请存储语句
+                get_str += "  store " + func_param_list[i].name + ", " + newinfo.name + "\n"; // 放入存储语句
+            }
+            else;
+        }
+        func_param_list.clear(); // 清空变量列表
+    }
+    else get_str += "";
+    // 函数本体
+    get_str += block->Dump();
+    // 函数结尾(如果有return就不添加ret语句, 否则添加ret语句)
+    if (block->GetUpward()=="return") get_str += "";
+    else {
+        if (func_type=="int") get_str += "  ret 0\n";
+        else get_str += "  ret\n";
+    }
+    get_str += "}\n";
+    // 遍历var_map, 清空-1层的所有ident记录
+    // 需要在var_map非空的条件下执行
+    if (!var_map.empty()) {
+        auto it = var_map.begin();
+        while(it!=var_map.end()) {
+            if (it->second.layer==-1) it = var_map.erase(it);
+            else ++it;
+        }
+    }
+    return get_str;
   }
   int GetValue() const override {
     // block->layer = layer; 
@@ -80,16 +171,57 @@ class FuncDefAST : public BaseAST {
   }
 };
 
+class FuncFParamsAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> param;  // 参数
+    std::unique_ptr<BaseAST> p_list;  // 参数列表
+    int ast_state; // 0为有多个参数, 1为单个参数
+    std::string Dump() const override {
+        if (ast_state==0){
+            std::string get_str = "";
+            get_str += param->Dump() + ", " + p_list->Dump();
+            get_str += "";
+            return get_str;
+        }
+        else if (ast_state==1) return param->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
+};
+
+class FuncFParamAST : public BaseAST {
+    public:
+    std::string btype;
+    std::string ident;
+    std::string Dump() const override {
+        if (btype=="int") {
+            paraminfo pinfo; // 记录函数参数信息
+            std::string name = "@"+ident;
+            pinfo.paramtype = 0;
+            pinfo.ident = ident;
+            pinfo.name = name;
+            func_param_list.push_back(pinfo);
+            return name + ": i32";
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
+};
+
 // 这个是必要的
 class FuncTypeAST : public BaseAST {
     public:
     std::string func_type;
-    std::string GetUpward() const override {return "";}
+    std::string GetUpward() const override {
+        if (func_type == "int") {return "int";}
+        else if (func_type=="void") {return "void";}
+        else return "";
+    }
     std::string Dump() const override {
-        //std::cout << "FuncTypeAST {";
-        //std::cout << func_type;
-        //std::cout << "}";
         if (func_type == "int") {return "i32";}
+        else if (func_type=="void") {return "";}
         else {return "";}
     };
     int GetValue() const override {return 0;}
@@ -165,11 +297,11 @@ class DeclAST : public BaseAST {
 class ConstDeclAST : public BaseAST {
     public:
     std::string word;
-    std::unique_ptr<BaseAST> btype;
+    std::string btype;
     std::unique_ptr<BaseAST> mylist;
     std::string Dump() const override {
         mylist->layer = layer;
-        mylist->fromup = btype->GetUpward();
+        mylist->fromup = btype;
         return mylist->Dump();
     }
     std::string GetUpward() const override {return "";}
@@ -178,11 +310,11 @@ class ConstDeclAST : public BaseAST {
 
 class VarDeclAST : public BaseAST {
     public:
-    std::unique_ptr<BaseAST> btype;
+    std::string btype;
     std::unique_ptr<BaseAST> mylist;
     std::string Dump() const override {
         mylist->layer = layer;
-        mylist->fromup = btype->GetUpward();
+        mylist->fromup = btype;
         return mylist->Dump();
     }
     std::string GetUpward() const override {return "";}
@@ -996,9 +1128,13 @@ class UnaryExpAST : public BaseAST {
     // 设置表达式状态
     // 状态0为一元表达式递归
     // 状态1为进入基础表达式
+    // 状态2为有参数function call
+    // 状态3为无参数function call
     int ast_state;
     // 占用的标识符号
     int place;
+    // 调用的函数标号
+    std::string ident;
     // 设置表达式要用到的koopa标识符
     std::string GetUpward() const override {
         if (ast_state==0) {
@@ -1010,6 +1146,11 @@ class UnaryExpAST : public BaseAST {
             else return "";
         }
         else if (ast_state==1) return son_tree->GetUpward();
+        else if (ast_state==2 || ast_state==3) {
+            varinfo using_func = SearchMap();
+            if (using_func.ret_type==1) return "%" + std::to_string(place);
+            else return "";
+        }
         else return "";
     };
     std::string Dump() const override {
@@ -1030,6 +1171,23 @@ class UnaryExpAST : public BaseAST {
         else if (ast_state==1) {
             return son_tree->Dump();
         }
+        else if (ast_state==2) {
+            std::string get_str;
+            get_str += son_tree->Dump();
+            varinfo using_func = SearchMap();
+            // call指令
+            if (using_func.ret_type==1) get_str += "  \%" + std::to_string(place) + " = call " + using_func.name + "(" + son_tree->GetUpward() + ")\n";
+            else get_str += "  call " + using_func.name + "(" + son_tree->GetUpward() + ")\n";
+            return get_str;
+        }
+        else if (ast_state==3) {
+            std::string get_str;
+            varinfo using_func = SearchMap();
+            // call指令
+            if (using_func.ret_type==1) get_str += "  \%" + std::to_string(place) + " = call " + using_func.name + "()\n";
+            else get_str += "  call " + using_func.name + "()\n";
+            return get_str;
+        }
         else return " ";
     };
     int GetValue() const override {
@@ -1042,12 +1200,25 @@ class UnaryExpAST : public BaseAST {
         else if (ast_state==1) return son_tree->GetValue();
         else return 0;
     }
+    // 查找函数符号表函数
+    varinfo SearchMap() const {
+        varinfo found;
+        for (auto it=var_map.begin();it!=var_map.end();++it) {
+            if (it->second.ident==ident && it->second.vartype==2) {
+                found = it->second;
+                return found;
+            }
+        }
+        std::cout << "function not found!";
+        assert(false);
+    }
 };
 
 class PrimaryExpAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> son_tree;
     int ast_state;  // 0表示为number or exp, 1表示lval
+    // 2表示function call
     // 将子树的upward直接上传
     std::string GetUpward() const override {
         if (ast_state==0) return son_tree->GetUpward();
@@ -1076,20 +1247,23 @@ class PrimaryExpAST : public BaseAST {
     }
 };
 
-// 添加AST节点UnaryOpAST用来翻译一元运算符
-/*尝试放弃
-class UnaryOpAST : public BaseAST {
+class FuncRParamsAST : public BaseAST {
     public:
-    std::string str_const;
-    std::string GetUpward() const override {return str_const;}
+    std::unique_ptr<BaseAST> exp;
+    std::unique_ptr<BaseAST> p_list;
+    int ast_state; // 0为多个参数, 1为单个参数
     std::string Dump() const override {
-        if (str_const=="+") {return "";}
-        else if (str_const=="-") {return "sub 0, ";}
-        else if (str_const=="!") {return "eq 0, ";}
-        else {return "";}
-    };
+        if (ast_state==0) return exp->Dump() + p_list->Dump();
+        else if (ast_state==1) return exp->Dump();
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return exp->GetUpward() + ", " + p_list->GetUpward();
+        else if (ast_state==1) return exp->GetUpward();
+        else return "";
+    }
+    int GetValue() const override {return 0;}
 };
-*/
 
 // 这个也是必要的！这里是文档的typo！助教你没有心！
 class NumberAST : public BaseAST {
