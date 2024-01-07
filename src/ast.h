@@ -12,6 +12,7 @@
 # include <limits.h> // 获取正无穷大
 # include <stack>
 # include <vector> // 制作func_param_list
+# include <map> // 记录库函数的使用次数情况的map
 
 // 尝试定义新的类型, 用于承接变量的信息
 struct varinfo {
@@ -35,6 +36,10 @@ extern std::unordered_map<std::string, varinfo> var_map;
 extern std::stack<int> while_stack;
 // 记录函数使用的参数信息
 extern std::vector<paraminfo> func_param_list;
+// 记录库函数的使用次数情况
+extern std::map<std::string, int> sysy_use_time;
+// 记录库函数的声明语句
+extern std::map<std::string, std::string> sysy_decl;
 
 class BaseAST {
     public:
@@ -62,7 +67,13 @@ class CompUnitAST: public BaseAST {
     std::string Dump() const override{
         std::string get_str;
         get_str += complist->Dump();
-        return get_str;
+        // 在函数最前方添加SysY库函数的声明
+        std::string func_decl_str = "";
+        for (auto it=sysy_use_time.begin();it!=sysy_use_time.end();++it) {
+            if (it->second > 0) func_decl_str += sysy_decl[it->first] + "\n";
+        }
+        if (func_decl_str.length() > 0) return func_decl_str + "\n" + get_str;
+        else return get_str;
     };
     int GetValue() const override {return complist->GetValue();}
 };
@@ -1148,7 +1159,7 @@ class UnaryExpAST : public BaseAST {
         else if (ast_state==1) return son_tree->GetUpward();
         else if (ast_state==2 || ast_state==3) {
             varinfo using_func = SearchMap();
-            if (using_func.ret_type==1) return "%" + std::to_string(place);
+            if (using_func.ret_type==1) return "\%" + std::to_string(place);
             else return "";
         }
         else return "";
@@ -1178,6 +1189,8 @@ class UnaryExpAST : public BaseAST {
             // call指令
             if (using_func.ret_type==1) get_str += "  \%" + std::to_string(place) + " = call " + using_func.name + "(" + son_tree->GetUpward() + ")\n";
             else get_str += "  call " + using_func.name + "(" + son_tree->GetUpward() + ")\n";
+            // 增加函数的调用记录
+            if (sysy_use_time.find(ident)!=sysy_use_time.end()) sysy_use_time[ident]++;
             return get_str;
         }
         else if (ast_state==3) {
@@ -1186,6 +1199,8 @@ class UnaryExpAST : public BaseAST {
             // call指令
             if (using_func.ret_type==1) get_str += "  \%" + std::to_string(place) + " = call " + using_func.name + "()\n";
             else get_str += "  call " + using_func.name + "()\n";
+            // 增加函数的调用记录
+            if (sysy_use_time.find(ident)!=sysy_use_time.end()) sysy_use_time[ident]++;
             return get_str;
         }
         else return " ";

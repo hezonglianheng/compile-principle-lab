@@ -12,6 +12,7 @@
 #include <cmath> // 引入绝对值函数
 #include <stack>
 #include <vector>
+#include <map>
 
 using namespace std;
 
@@ -42,6 +43,30 @@ const string ZERO_REGISTER = "x0";
 string registers[7] = {"t0", "t1", "t2", "t3", "t4", "t5", "t6"};
 // 参数传递用寄存器
 string params_registers[8] = {"a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"};
+// SysY库函数总表
+// 记录库函数的名称和返回值对应情况
+map<string, int> sysy_funcs = {
+  {"getint", 1}, {"getch", 1}, {"getarray", 1}, 
+  {"putint", 0}, {"putch", 0}, {"putarray", 0},
+  {"starttime", 0}, {"stoptime", 0}
+};
+// 记录库函数的使用次数情况
+map<string, int> sysy_use_time = {
+  {"getint", 0}, {"getch", 0}, {"getarray", 0}, 
+  {"putint", 0}, {"putch", 0}, {"putarray", 0},
+  {"starttime", 0}, {"stoptime", 0}
+};
+// 记录decl语句的值情况
+map<string, string> sysy_decl = {
+  {"getint", "decl @getint(): i32"}, 
+  {"getch", "decl @getch(): i32"}, 
+  {"getarray", "decl @getarray(*i32): i32"}, 
+  {"putint", "decl @putint(i32)"}, 
+  {"putch", "decl @putch(i32)"}, 
+  {"putarray", "decl @putarray(i32, *i32)"},
+  {"starttime", "decl @starttime()"}, 
+  {"stoptime", "decl @stoptime()"}
+};
 
 // 存放已经分配好的register和指针的关系
 // 暂时废除
@@ -107,6 +132,18 @@ int main(int argc, const char *argv[]) {
   auto mode = argv[1];
   auto input = argv[2];
   auto output = argv[4];
+
+  // 遍历SysY库函数记录, 添加到全局符号表中
+  for (auto it=sysy_funcs.begin();it!=sysy_funcs.end();++it) {
+    varinfo func_info; // 函数的信息
+    string func_name = "@" + it->first;
+    func_info.ident = it->first; // 函数名称
+    func_info.layer = -2; // 函数的层级为-2
+    func_info.name = func_name; // 函数标号
+    func_info.vartype = 2; // vartype==2表明为函数
+    func_info.ret_type = it->second; // 函数返回值情况
+    var_map[func_name] = func_info;
+  }
 
   // 打开输入文件, 并且指定 lexer 在解析的时候读取这个文件
   yyin = fopen(input, "r");
@@ -201,6 +238,8 @@ string Visit(const koopa_raw_slice_t &slice) {
 // 访问函数
 string Visit(const koopa_raw_function_t &func) {
   // 执行一些其他的必要操作
+  // 跳过所有的函数声明
+  if (func->bbs.len == 0) return "";
   // 获得函数的名字作为标识符
   string func_name = func->name;
   // 记录函数是否有返回值
