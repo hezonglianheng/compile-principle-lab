@@ -84,6 +84,8 @@ CompUnit
   : CompList {
     auto comp_unit = make_unique<CompUnitAST>();
     comp_unit->complist = unique_ptr<BaseAST>($1);
+    comp_unit->layer = layer_count;
+    // layer_count++;
     ast = move(comp_unit);
   }
   ;
@@ -153,6 +155,8 @@ FuncDef
     ast->ident = *unique_ptr<string>($2);
     ast->p_list = unique_ptr<BaseAST>($4);
     ast->block = unique_ptr<BaseAST>($6);
+    ast->params_layer = layer_count;
+    layer_count++;
     ast->ast_state = 1;
     $$ = ast;
   }
@@ -162,6 +166,8 @@ FuncDef
     ast->ident = *unique_ptr<string>($2);
     ast->p_list = unique_ptr<BaseAST>($4);
     ast->block = unique_ptr<BaseAST>($6);
+    ast->params_layer = layer_count;
+    layer_count++;
     ast->ast_state = 1;
     $$ = ast;
   }

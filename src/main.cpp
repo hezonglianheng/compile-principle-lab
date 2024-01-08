@@ -109,6 +109,8 @@ string Visit(const koopa_raw_branch_t branch);
 string Visit(const koopa_raw_jump_t jump);
 // 01-03: 增加访问call指令的函数
 string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value);
+// 1-7: 增加访问全局申请内存指令的函数
+string Visit(const koopa_raw_global_alloc_t glob_alloc, const koopa_raw_value_t &value);
 // 增加计算函数所用栈空间和基本块所用栈空间的函数
 int CountStackSpace(const koopa_raw_slice_t &slice);
 // 增加计算类型占据栈空间的函数
@@ -196,7 +198,7 @@ int main(int argc, const char *argv[]) {
 // 访问 raw program
 string Visit(const koopa_raw_program_t &program) {
   // 执行一些其他的必要操作
-  // todo: 遍历全局变量得到一些信息
+  // 遍历全局变量得到一些信息
   // 遍历全部函数, 得到信息
   string program_str = "";
   // 访问所有全局变量
@@ -350,6 +352,10 @@ string Visit(const koopa_raw_value_t &value) {
       // 01-03: 添加新类型 函数调用 call
       get_str = Visit(kind.data.call, value);
       break;
+    case KOOPA_RVT_GLOBAL_ALLOC:
+      // 1-7: 添加新类型 全局申存 global alloc
+      get_str = Visit(kind.data.global_alloc, value);
+      break;
     default:
       // cout << "unknown type";
       // 其他类型暂时遇不到
@@ -405,7 +411,6 @@ string Visit(const koopa_raw_integer_t inst){
   // 返回获得值的字符串形式
   return val_str;
 }
-
 
 string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   // 测试结果是: 左值右值作为koopa_raw_value_t(指针)有两种可能性: 
@@ -648,6 +653,7 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
   int src_place; // source的位置
   int value_place; // 本指令对应的value指针在栈中的位置
   const auto src_kind = load.src->kind;  // 加载值的类型
+  string src_name = load.src->name; // 加载值的名称
   // 先进行读存操作
   switch (src_kind.tag) {
     case KOOPA_RVT_ALLOC:
@@ -662,7 +668,14 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
         src_place = stack_place[load.src];
         get_str += "  lw   " + registers[register_counter] + ", " + to_string(src_place) + "(sp)\n";
     }
-    break;
+      break;
+    case KOOPA_RVT_GLOBAL_ALLOC:
+      // load全局变量
+      // 首先加载全局变量的地址
+      get_str += "  la   " + registers[register_counter] + ", " + src_name.substr(1) + "\n";
+      // 之后从全局变量地址将值加载到寄存器(偏移量为0)
+      get_str += "  lw   " + registers[register_counter] + ", " + "0(" + registers[register_counter] + ")\n";
+      break;
     default:
       assert(false);
       break;
@@ -683,7 +696,14 @@ string Visit(const koopa_raw_store_t store) {
   int value_place; // value在栈上的位置
   int dest_place; // dest在栈上的位置
   const auto value_kind = store.value->kind;  // 值的类型
-  const auto dest_kind = store.dest->kind; // 存储标识符的类型?
+  const auto dest_kind = store.dest->kind; // 存储标识符的类型
+  string dest_name = store.dest->name;
+  /*
+  // (全局变量用)全局变量的名字
+  string dest_name = ""; 
+  if (dest_kind.tag==KOOPA_RVT_GLOBAL_ALLOC) dest_name = store.dest->name;
+  else dest_name = "";
+  */
   switch (value_kind.tag)
   {
   case KOOPA_RVT_INTEGER:
@@ -767,6 +787,13 @@ string Visit(const koopa_raw_store_t store) {
       dest_place = stack_place[store.dest];
       get_str += "  sw   " + registers[register_counter] + ", " + to_string(dest_place) + "(sp)\n";
     }
+    break;
+  case KOOPA_RVT_GLOBAL_ALLOC:
+    // 全局申存的场合需要注意处理
+    // 先将全局变量地址加载到寄存器中(注意这里是一个新的寄存器)
+    get_str += "  la   " + registers[register_counter+1] + ", " + dest_name.substr(1) + "\n";
+    // 再将要存储的值写到全局变量中
+    get_str += "  sw   " + registers[register_counter] + ", " + "0(" + registers[register_counter+1] + ")\n";
     break;
   default:
     // 否则报错
@@ -920,6 +947,30 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
   default:
     break;
   }
+  return get_str;
+}
+
+string Visit(const koopa_raw_global_alloc_t glob_alloc, const koopa_raw_value_t &value) {
+  string get_str = "";
+  get_str += "  .data\n";
+  string var_name = value->name;
+  get_str += "  .global " + var_name.substr(1) + "\n";
+  get_str += var_name.substr(1) + ":\n";
+  switch (glob_alloc.init->kind.tag)
+  {
+  case KOOPA_RVT_ZERO_INIT:
+    /* 0初始化的情况 */
+    get_str += "  .zero 4\n";
+    break;
+  case KOOPA_RVT_INTEGER:
+    /* 赋值的情况 */
+    get_str += "  .word " + Visit(glob_alloc.init) + "\n";
+    break;
+  default:
+    assert(false);
+    break;
+  }
+  get_str += "\n";
   return get_str;
 }
 

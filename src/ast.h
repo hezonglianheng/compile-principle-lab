@@ -40,6 +40,8 @@ extern std::vector<paraminfo> func_param_list;
 extern std::map<std::string, int> sysy_use_time;
 // 记录库函数的声明语句
 extern std::map<std::string, std::string> sysy_decl;
+// layer的最终值
+extern int layer_count;
 
 class BaseAST {
     public:
@@ -66,6 +68,7 @@ class CompUnitAST: public BaseAST {
     std::string GetUpward() const override {return "";}
     std::string Dump() const override{
         std::string get_str;
+        complist->layer = layer;
         get_str += complist->Dump();
         // 在函数最前方添加SysY库函数的声明
         std::string func_decl_str = "";
@@ -84,13 +87,25 @@ class CompListAST : public BaseAST {
     std::unique_ptr<BaseAST> item;
     int ast_state; // 0为多个值, 1为单个值
     std::string Dump() const override {
-        if (ast_state==0) return list->Dump() + "\n" + item->Dump();
-        else if (ast_state==1) return item->Dump();
+        if (ast_state==0) {
+            list->layer = layer; item->layer = layer;
+            return list->Dump() + "\n" + item->Dump();
+        }
+        else if (ast_state==1) {
+            item->layer = layer;
+            return item->Dump();
+        }
         else return "";
     }
     std::string GetUpward() const override {
-        if (ast_state==0) return list->GetUpward() + item->GetUpward();
-        else if (ast_state==1) return item->GetUpward();
+        if (ast_state==0) {
+            list->layer = layer; item->layer = layer;
+            return list->GetUpward() + item->GetUpward();
+        }
+        else if (ast_state==1) {
+            item->layer = layer;
+            return item->GetUpward();
+        }
         else return "";
     }
     int GetValue() const override {return 0;}
@@ -100,9 +115,27 @@ class CompItemAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> content;
     int ast_state;  // 0为函数, 1为全局变量
-    std::string Dump() const override {return content->Dump();}
-    std::string GetUpward() const override {return content->GetUpward();}
-    int GetValue() const override {return content->GetValue();}
+    std::string Dump() const override {
+        if (ast_state==0 || ast_state==1) {
+            content->layer = layer;
+            return content->Dump();
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0 || ast_state==1) {
+            content->layer = layer;
+            return content->GetUpward();
+        }
+        else return "";
+    }
+    int GetValue() const override {
+        if (ast_state==0 || ast_state==1) {
+            content->layer = layer;
+            return content->GetValue();
+        }
+        else return 0;
+    }
 };
 
 // FuncDef 也是 BaseAST
@@ -112,6 +145,7 @@ class FuncDefAST : public BaseAST {
   std::string ident;
   std::unique_ptr<BaseAST> p_list;  // 参数列表
   std::unique_ptr<BaseAST> block;
+  int params_layer;
   int ast_state; // 0为无parameter, 1为有parameter
   std::string GetUpward() const override {return "";}
   std::string Dump() const override {
@@ -122,7 +156,7 @@ class FuncDefAST : public BaseAST {
     func_info.vartype = 2; // 表明为函数
     func_info.ident = ident; // 函数名称
     func_info.name = name; // koopa IR中要使用的名称
-    func_info.layer = -2; // 函数是全局量
+    func_info.layer = layer; // 函数是全局量
     if (func_type=="int") func_info.ret_type = 1;
     else func_info.ret_type = 0;
     var_map[name] = func_info; // 将函数信息放入var_map
@@ -144,7 +178,7 @@ class FuncDefAST : public BaseAST {
                 varinfo newinfo;
                 std::string key = func_param_list[i].ident + "_param";
                 newinfo.ident = func_param_list[i].ident;
-                newinfo.layer = -1; // 表明为函数变量层
+                newinfo.layer = params_layer; // 表明为函数变量层
                 newinfo.vartype = 1; // 视为变量
                 newinfo.name = "%" + key; // 使用的名字
                 var_map[key] = newinfo; // 放入函数符号表
@@ -165,12 +199,12 @@ class FuncDefAST : public BaseAST {
         else get_str += "  ret\n";
     }
     get_str += "}\n";
-    // 遍历var_map, 清空-1层的所有ident记录
+    // 遍历var_map, 清空params_layer层的所有ident记录
     // 需要在var_map非空的条件下执行
     if (!var_map.empty()) {
         auto it = var_map.begin();
         while(it!=var_map.end()) {
-            if (it->second.layer==-1) it = var_map.erase(it);
+            if (it->second.layer==params_layer) it = var_map.erase(it);
             else ++it;
         }
     }
@@ -365,20 +399,29 @@ class VarDefAST : public BaseAST {
         // 压入map放在这个位置进行
         varinfo info;
         info.vartype = 1;
-        std::string key = ident + "_" + std::to_string(layer);
+        // 全局变量的场合需要做特别处理
+        std::string key;
+        if (layer==layer_count) key = ident + "_glob";
+        else key = ident + "_" + std::to_string(layer);
         // 定义info的一系列信息
         info.ident = ident;
         info.layer = layer;
-        info.name = "@" + ident + "_" + std::to_string(layer);
+        info.name = "@" + key;
         // var_map[ident] = info;
         var_map[key] = info;
         if (ast_state==0) {
-            if (fromup=="int") return "  " + info.name + " = alloc i32\n" + init->Dump() + "  store " + init->GetUpward() + ", " + info.name + "\n";
+            if (fromup=="int") {
+                // 有初始值的变量需要考虑处理策略
+                if (layer==layer_count) return "global " + info.name + " = alloc i32, " + init->GetUpward() + "\n";
+                else return "  " + info.name + " = alloc i32\n" + init->Dump() + "  store " + init->GetUpward() + ", " + info.name + "\n";
+            }
             else return "";
         }
         else if (ast_state==1) {
-            //return info.name + " = alloc "
-            if (fromup=="int") return "  " + info.name + " = alloc i32\n";
+            if (fromup=="int") {
+                if (layer==layer_count) return "global " + info.name + " = alloc i32, zeroinit\n";
+                else return "  " + info.name + " = alloc i32\n";
+            }
             else return "";
         }
         else return "";
@@ -488,9 +531,12 @@ class LValAST : public BaseAST {
         // int check_layer = -1;
         int check_layer = INT_MAX;
         for (auto it=var_map.begin();it!=var_map.end();++it) {
-            if (it->second.ident==ident) {
-                // if (it->second.layer>check_layer) {
-                if (it->second.layer<check_layer) {
+            // 添加: 考虑排除搜寻到函数的情况
+            if (it->second.ident==ident && it->second.vartype != 2) {
+                // todo: 解决设计的时候发生的冲突
+                // 设计的时候, 外层的layer大, 内层的layer小
+                // 而全局变量的layer是小的复数
+                if (it->second.layer < check_layer) {
                     curr_info = it->second;
                     check_layer = it->second.layer;
                 }
@@ -840,7 +886,8 @@ class LOrExpAST :public BaseAST {
                 // 按位或运算
                 // get_str += "  %" + std::to_string(place3) + " = or"+" %" + std::to_string(place1)+","+" %" + std::to_string(place2) + "\n";
                 // 申存, 用于赋值
-                get_str += "  %" + std::to_string(place1) + " = alloc i32\n";
+                // get_str += "  %" + std::to_string(place1) + " = alloc i32\n";
+                get_str += "  @lor_" + std::to_string(place1) + " = alloc i32\n";
                 // 先考虑左值
                 get_str += lor->Dump(); // 左值的运算过程
                 get_str += "  br " + lor->GetUpward() + ", " + one_block + ", " + r_block + "\n\n";
@@ -852,16 +899,19 @@ class LOrExpAST :public BaseAST {
                 // 考虑0后续 请考虑如何给语句标号赋值？
                 get_str += zero_block + ":\n";
                 // get_str += "  %" + std::to_string(place3) + " = add 0, 1\n";
-                get_str += "  store 0,  %" + std::to_string(place1) + "\n";
+                //get_str += "  store 0, %" + std::to_string(place1) + "\n";
+                get_str += "  store 0, @lor_" + std::to_string(place1) + "\n";
                 get_str += "  jump " + successor_block + "\n\n";
                 // 考虑1后续
                 get_str += one_block + ":\n";
                 // get_str += "  %" + std::to_string(place3) + " = add 0, 0\n";
-                get_str += "  store 1, %" + std::to_string(place1) + "\n";
+                //get_str += "  store 1, %" + std::to_string(place1) + "\n";
+                get_str += "  store 1, @lor_" + std::to_string(place1) + "\n";
                 get_str += "  jump " + successor_block + "\n\n";
                 // 考虑后继
                 get_str += successor_block + ":\n";
-                get_str += "  %" + std::to_string(place3) + " = load" + " %" + std::to_string(place1) + "\n";
+                //get_str += "  %" + std::to_string(place3) + " = load" + " %" + std::to_string(place1) + "\n";
+                get_str += "  %" + std::to_string(place3) + " = load" + " @lor_" + std::to_string(place1) + "\n";
                 return get_str;
             }
             else return "";
@@ -924,7 +974,7 @@ class LAndExpAST : public BaseAST {
                 get_str += " %" + std::to_string(place3) + " = and" +" %" + std::to_string(place1) + "," + " %" + std::to_string(place2) + "\n";
                 */
                 // 申存, 用于赋值
-                get_str += "  %" + std::to_string(place1) + " = alloc i32\n";
+                get_str += "  @land_" + std::to_string(place1) + " = alloc i32\n";
                 // 考虑左值
                 get_str += land->Dump();
                 get_str += "  br " + land->GetUpward() + ", " + r_block + ", " + zero_block + "\n\n";
@@ -935,16 +985,16 @@ class LAndExpAST : public BaseAST {
                 // 考虑0后续
                 get_str += zero_block + ":\n";
                 // get_str += " %" + std::to_string(place3) + " = add 0, 0\n";
-                get_str += "  store 0, %" + std::to_string(place1) + "\n";
+                get_str += "  store 0, @land_" + std::to_string(place1) + "\n";
                 get_str += "  jump " + successor_block + "\n\n";
                 // 考虑1后续
                 get_str += one_block + ":\n";
                 // get_str += " %" + std::to_string(place3) + " = add 0, 1\n";
-                get_str += "  store 1, %" + std::to_string(place1) + "\n";
+                get_str += "  store 1, @land_" + std::to_string(place1) + "\n";
                 get_str += "  jump " + successor_block + "\n\n";
                 // 考虑后继
                 get_str += successor_block + ":\n";
-                get_str += "  %" + std::to_string(place3) + " = load" + "  %" + std::to_string(place1) + "\n";
+                get_str += "  %" + std::to_string(place3) + " = load" + " @land_" + std::to_string(place1) + "\n";
                 return get_str;
             }
             else return "";
