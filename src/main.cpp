@@ -1090,7 +1090,7 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
       // load全局变量
       // 获得全局变量的名字
       src_name = get_elem_ptr.src->name;
-      // 首先加载全局变量的地址
+      // 加载全局变量的地址
       get_str += "  la   " + get_elem_reg + ", " + src_name.substr(1) + "\n";
       break;
     case KOOPA_RVT_ALLOC:
@@ -1104,14 +1104,8 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
       }
       break;
     case KOOPA_RVT_GET_ELEM_PTR:
-      // 计算get_elem_ptr的地址, 分成小于2048和大于2048两类
-      // 小于2048使用addi伪指令
-      if (stack_place[get_elem_ptr.src] < 2048) get_str += "  addi " + get_elem_reg + ", sp, " + to_string(stack_place[get_elem_ptr.src]) + "\n";
-      // 否则使用指令
-      else {
-        get_str += "  li   " + get_elem_reg + ", " + to_string(stack_place[get_elem_ptr.src]) + "\n";
-        get_str += "  add  " + get_elem_reg + ", sp, " + get_elem_reg + "\n";
-      }
+      // 先将来源加载到寄存器中
+      get_str += DealLwOrder(registers[register_counter+1], stack_place[get_elem_ptr.src]);
       break;
     default:
       cout << "unknown elem source type: " << get_elem_ptr.src->kind.tag << "\n";
@@ -1175,15 +1169,12 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
     // alloc类型看array的base
     // ptr类型看ptr的base
     case KOOPA_RVT_ALLOC:
-      cout << "base tag:" << get_elem_ptr.src->ty->data.array.base->data.array.base->tag << "\n";
       src_size = CountStackSpace(get_elem_ptr.src->ty->data.array.base->data.array.base);
       break;
     case KOOPA_RVT_GLOBAL_ALLOC:
-      cout << "base tag:" << get_elem_ptr.src->ty->data.array.base->data.array.base->tag << "\n";
       src_size = CountStackSpace(get_elem_ptr.src->ty->data.array.base->data.array.base);
       break;
     case KOOPA_RVT_GET_ELEM_PTR:
-      cout << "base tag:" << get_elem_ptr.src->ty->data.pointer.base->data.array.base->tag << "\n";
       src_size = CountStackSpace(get_elem_ptr.src->ty->data.pointer.base->data.array.base);
       break;
     default:
