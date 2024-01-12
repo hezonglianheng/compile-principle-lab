@@ -13,10 +13,11 @@
 # include <stack>
 # include <vector> // 制作func_param_list
 # include <map> // 记录库函数的使用次数情况的map
+# include <math.h> // 提供乘方运算
 
 // 尝试定义新的类型, 用于承接变量的信息
 struct varinfo {
-    int vartype; // 0为const, 1为var, 2为函数?
+    int vartype; // 0为const, 1为var, 2为函数, 3为数组
     std::string ident;  // 变量标号
     int layer; // 表明ident所属的层级, -1为函数参数变量, -2为全局变量(两个特殊层级)
     int value; // const的计算值
@@ -42,6 +43,12 @@ extern std::map<std::string, int> sysy_use_time;
 extern std::map<std::string, std::string> sysy_decl;
 // layer的最终值
 extern int layer_count;
+// 记录数组的维度信息
+extern std::vector<int> array_dimensions;
+// 记录数组初始化参数信息
+extern std::vector<int> array_elements;
+// 记录数组取值的标号信息
+extern std::vector<std::string> indexes;
 
 class BaseAST {
     public:
@@ -393,38 +400,125 @@ class VarListAST : public BaseAST {
 class VarDefAST : public BaseAST {
     public:
     std::string ident;
+    std::unique_ptr<BaseAST> list; // 支持数组索引
     std::unique_ptr<BaseAST> init;
     int ast_state; // 定义表达式状态, 0为有定义, 1为只声明
     std::string Dump() const override {
-        // 压入map放在这个位置进行
-        varinfo info;
-        info.vartype = 1;
-        // 全局变量的场合需要做特别处理
-        std::string key;
-        if (layer==layer_count) key = ident + "_glob";
-        else key = ident + "_" + std::to_string(layer);
-        // 定义info的一系列信息
-        info.ident = ident;
-        info.layer = layer;
-        info.name = "@" + key;
-        // var_map[ident] = info;
-        var_map[key] = info;
-        if (ast_state==0) {
-            if (fromup=="int") {
-                // 有初始值的变量需要考虑处理策略
-                if (layer==layer_count) return "global " + info.name + " = alloc i32, " + init->GetUpward() + "\n";
-                else return "  " + info.name + " = alloc i32\n" + init->Dump() + "  store " + init->GetUpward() + ", " + info.name + "\n";
+        list->fromup = "def";
+        list->Dump(); // 执行一次Dump获取参数
+        // array_dimensions为空, 表明定义的是变量
+        if (array_dimensions.empty()) {
+            // 压入map放在这个位置进行
+            varinfo info;
+            info.vartype = 1;
+            // 全局变量的场合需要做特别处理
+            std::string key;
+            if (layer==layer_count) key = ident + "_glob";
+            else key = ident + "_" + std::to_string(layer);
+            // 定义info的一系列信息
+            info.ident = ident;
+            info.layer = layer;
+            info.name = "@" + key;
+            // var_map[ident] = info;
+            var_map[key] = info;
+            if (ast_state==0) {
+                if (fromup=="int") {
+                    // 有初始值的变量需要考虑处理策略
+                    init->fromup = "num"; // 表明为纯数值
+                    if (layer==layer_count) return "global " + info.name + " = alloc i32, " + init->GetUpward() + "\n";
+                    else return "  " + info.name + " = alloc i32\n" + init->Dump() + "  store " + init->GetUpward() + ", " + info.name + "\n";
+                }
+                else return "";
+            }
+            else if (ast_state==1) {
+                // todo: 考虑对这一部分做修改?
+                if (fromup=="int") {
+                    if (layer==layer_count) return "global " + info.name + " = alloc i32, zeroinit\n";
+                    else return "  " + info.name + " = alloc i32\n";
+                }
+                else return "";
             }
             else return "";
         }
-        else if (ast_state==1) {
+        // array_dimensions不为空, 表明定义的是数组
+        else {
             if (fromup=="int") {
-                if (layer==layer_count) return "global " + info.name + " = alloc i32, zeroinit\n";
-                else return "  " + info.name + " = alloc i32\n";
+                std::string get_str = ""; // 收集语句
+                varinfo arrayinfo;
+                std::string name = "@" + ident;
+                arrayinfo.vartype = 3; // 表明为数组
+                arrayinfo.ident = ident; // 记录其标号
+                arrayinfo.layer = layer; // 记录其所在层级
+                if (layer==layer_count) {name += "_glob"; get_str += "global " + name + " = alloc ";}
+                else {name += "_" + std::to_string(layer); get_str += "  " + name + " = alloc ";}
+                arrayinfo.name = name; // 记录后续使用的时候使用的名称
+                var_map[name] = arrayinfo; // 加入符号表
+                // 记录数组的数据类型
+                std::string datatype = "i32";
+                // 逆序生成数组的数据类型
+                for (int i = array_dimensions.size()-1; i >= 0; --i) {
+                    datatype = "[" + datatype + ", " + std::to_string(array_dimensions[i]) + "]";
+                }
+                get_str += datatype; // 数据类型加入生成字符串
+                // 生成数组初始化语句
+                if (ast_state==0) {
+                    init->fromup = "glob"; // 表明为全局初始化
+                    init->Dump(); // 执行读取初始化情形的操作
+                }
+                else if (ast_state==1) {
+                    // 统一做0填充
+                    // 计算数组大小
+                    int array_size = 1;
+                    for(int i = 0; i < array_dimensions.size(); ++i) array_size *= array_dimensions[i];
+                    // 填充0到array_elements
+                    for(int i = 0; i < array_size; ++i) array_elements.push_back(0);
+                }
+                else;
+                if (layer==layer_count) {
+                    // 全局变量的场合的格式
+                    std::vector<int> brace; // 存放括号标记
+                    brace.push_back(array_dimensions.back());
+                    for(int i = array_dimensions.size()-2; i >= 0; --i) {
+                        brace.push_back(brace.back() * array_dimensions[i]);
+                    }
+                    for(int i = 0; i < array_elements.size(); ++i){
+                        get_str += ", ";
+                        for (int j = 0; j < brace.size(); ++j) if (i % brace[j]==0) get_str += "{";
+                        get_str += std::to_string(array_elements[i]);
+                        for (int j = 0; j < brace.size(); ++j) if ((i+1) % brace[j]==0) get_str += "}";
+                    }
+                }
+                else {
+                    // 非全局变量的格式
+                    get_str += "\n";
+                    // int ptr_count = 0;  // 指针计数
+                    for(int i = 0; i < array_elements.size(); ++i) {
+                        std::string curr_ptr = name; // 来源指针名字
+                        std::string new_ptr = ""; // 新的指针名字
+                        int elem_place = i;
+                        // 按层次生成读取指针的语句
+                        for(int j = 0; j < array_dimensions.size(); ++j) {
+                            // 生成新的指针
+                            new_ptr = "%" + ident + "_ptr" + std::to_string(i) + "_" +std::to_string(j);
+                            // 求出需要查找的位置
+                            int ask_place = elem_place / std::pow(array_dimensions.back(), (array_dimensions.size()-1-j));
+                            // 调整元素位置
+                            elem_place -= ask_place * std::pow(array_dimensions.back(), (array_dimensions.size()-1-j));
+                            // 生成语句
+                            get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + std::to_string(ask_place) + "\n";
+                            // 调整curr_ptr
+                            curr_ptr = new_ptr;
+                        }
+                        // 存储语句
+                        get_str += "  store " + std::to_string(array_elements[i]) + ", " + curr_ptr + "\n";
+                    }
+                }
+                get_str += "\n";
+                array_dimensions.clear(); array_elements.clear();
+                return get_str;
             }
-            else return "";
+            else {array_dimensions.clear(); array_elements.clear(); return "";}
         }
-        else return "";
     }
     std::string GetUpward() const override {return ident;}
     int GetValue() const override {return 0;}
@@ -433,9 +527,86 @@ class VarDefAST : public BaseAST {
 class InitValAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> exp;
-    std::string Dump() const override {return exp->Dump();}
-    std::string GetUpward() const override {return exp->GetUpward();}
-    int GetValue() const override {return exp->GetValue();}
+    std::unique_ptr<BaseAST> list;
+    int ast_state;  // 0为常数值, 1为空的数组初值, 2为有值的数组初值 
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (fromup=="num") return exp->Dump(); // 不关心纯数值的Dump
+            else if (fromup=="glob") assert(false); // 全局数组初始化不能是单个值
+            else if (fromup=="sum"||fromup=="part") {
+                // 将值放入元素表中
+                array_elements.push_back(exp->GetValue());
+                return "";
+            }
+            else return "";
+        }
+        else if (ast_state==1) {
+            // 检查维度容器非空
+            assert(!array_dimensions.empty());
+            // 检查已有元素数量是否符合要求(被最后一维整除)
+            assert(array_elements.size() % array_dimensions.back() == 0);
+            // 计算补0标准
+            int fulfill = 1;
+            if (fromup=="glob") for(int i=0;i<array_dimensions.size();++i) fulfill *= array_dimensions[i]; // 全局情况取全部维度
+            else if (fromup=="sum") fulfill = array_dimensions.back(); // 局部情况取最后一维
+            else assert(false); // 其他情况报错
+            // 执行补0操作, 直接补充fulfill个0元素
+            for (int i = 0; i < fulfill; ++i) array_elements.push_back(0);
+            return "";
+        }
+        else if (ast_state==2) {
+            // 检查维度容器非空
+            assert(!array_dimensions.empty());
+            // 检查已有元素数量是否符合要求(被最后一维整除)
+            assert(array_elements.size() % array_dimensions.back() == 0);
+            // 计算补0标准
+            int fulfill = 1;
+            if (fromup=="glob") for(int i=0;i<array_dimensions.size();++i) fulfill *= array_dimensions[i]; // 全局情况取全部维度
+            else if (fromup=="sum") fulfill = array_dimensions.back(); // 局部情况取最后一维
+            else assert(false); // 其他情况报错
+            // 执行list
+            // list等级降级, 等级为glob, sum, part依次递减
+            if(fromup=="glob") list->fromup = "sum";
+            else if(fromup=="sum") list->fromup = "part";
+            else assert(false); // 否则报错
+            list->Dump();
+            // 执行补0操作
+            // 全局的场合补满
+            if(fromup=="glob") for(int i = array_elements.size(); i < fulfill; ++i) array_elements.push_back(0);
+            // 局部的场合补齐
+            else if(fromup=="sum") for(int i = 0; i < array_elements.size() % fulfill; ++i) array_elements.push_back(0);
+            return "";
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {
+        if (ast_state==0) return exp->GetUpward();
+        else return ""; // 其他情况不需要考虑其GetUpward值
+    }
+    int GetValue() const override {
+        if (ast_state==0) return exp->GetValue();
+        else return 0; // 其他情况不需要考虑其GetValue值
+    }
+};
+
+class InitValListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> list;
+    std::unique_ptr<BaseAST> init;
+    int ast_state;
+    std::string Dump() const override {
+        if (ast_state==0) {
+            list->fromup = fromup; init->fromup = fromup;
+            return list->Dump() + init->Dump();
+        }
+        else if (ast_state==1) {
+            init->fromup = fromup;
+            return init->Dump();
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
 };
 
 class ConstListAST : public BaseAST {
@@ -478,24 +649,99 @@ class BTypeAST : public BaseAST {
 class ConstDefAST : public BaseAST {
     public:
     std::string ident;
+    std::unique_ptr<BaseAST> list; // 数组用的索引值
     std::unique_ptr<BaseAST> init;
     std::string Dump() const override {
-        // 将const值的记录实现在这个位置
-        if (fromup=="int") {
-        varinfo constinfo;
-        // 定义var_map的key
-        std::string key = ident + "_" + std::to_string(layer);
-        // 定义constinfo的一系列信息
-        constinfo.vartype = 0;
-        constinfo.ident = ident;
-        constinfo.layer = layer;
-        constinfo.value = init->GetValue();
-        // var_map[ident] = constinfo;
-        // 压入map
-        var_map[key] = constinfo;
+        list->fromup = "def"; // 表明是函数定义部分
+        list->Dump(); // 执行一个Dump操作以获得参数
+        // array_dimensions是空的, 表明定义了常量
+        if (array_dimensions.empty()) {
+            // 将const值的记录实现在这个位置
+            if (fromup=="int") {
+                varinfo constinfo;
+                // 定义var_map的key
+                std::string key = ident + "_" + std::to_string(layer);
+                // 定义constinfo的一系列信息
+                constinfo.vartype = 0;
+                constinfo.ident = ident;
+                constinfo.layer = layer;
+                init->fromup = "num"; // 表明为纯数字
+                constinfo.value = init->GetValue();
+                // 压入map
+                var_map[key] = constinfo;
+            }
+            else;
+            return "";
         }
-        else;
-        return "";
+        // array_dimension不是空的, 表明定义的是数组
+        else {
+            if (fromup=="int") {
+                std::string get_str = ""; // 收集语句
+                varinfo arrayinfo;
+                std::string name = "@" + ident;
+                arrayinfo.vartype = 3; // 表明为数组
+                arrayinfo.ident = ident; // 记录其标号
+                arrayinfo.layer = layer; // 记录其所在层级
+                if (layer==layer_count) {name += "_glob"; get_str += "global " + name + " = alloc ";}
+                else {name += "_" + std::to_string(layer); get_str += "  " + name + " = alloc ";}
+                arrayinfo.name = name; // 记录后续使用的时候使用的名称
+                var_map[name] = arrayinfo; // 加入符号表
+                // 记录数组的数据类型
+                std::string datatype = "i32";
+                // 逆序生成数组的数据类型
+                for (int i = array_dimensions.size()-1; i >= 0; --i) {
+                    datatype = "[" + datatype + ", " + std::to_string(array_dimensions[i]) + "]";
+                }
+                get_str += datatype; // 数据类型加入生成字符串
+                std::cout << "datatype: " << datatype << "\n";
+                // todo: 生成数组初始化语句
+                init->fromup = "glob"; // 表明为全局初始化
+                init->Dump(); // 执行读取初始化情形的操作
+                if (layer==layer_count) {
+                    // 全局变量的场合的格式
+                    std::vector<int> brace; // 存放括号标记
+                    brace.push_back(array_dimensions.back());
+                    for(int i = array_dimensions.size()-2; i >= 0; --i) {
+                        brace.push_back(brace.back() * array_dimensions[i]);
+                    }
+                    for(int i = 0; i < array_elements.size(); ++i){
+                        get_str += ", ";
+                        for (int j = 0; j < brace.size(); ++j) if (i % brace[j]==0) get_str += "{";
+                        get_str += std::to_string(array_elements[i]);
+                        for (int j = 0; j < brace.size(); ++j) if ((i+1) % brace[j]==0) get_str += "}";
+                    }
+                }
+                else {
+                    // 非全局变量的格式
+                    get_str += "\n";
+                    // int ptr_count = 0;  // 指针计数
+                    for(int i = 0; i < array_elements.size(); ++i) {
+                        std::string curr_ptr = name; // 来源指针名字
+                        std::string new_ptr = ""; // 新的指针名字
+                        int elem_place = i;
+                        // 按层次生成读取指针的语句
+                        for(int j = 0; j < array_dimensions.size(); ++j) {
+                            // 生成新的指针
+                            new_ptr = "%" + ident + "_ptr" + std::to_string(i) + "_" +std::to_string(j);
+                            // 求出需要查找的位置
+                            int ask_place = elem_place / std::pow(array_dimensions.back(), (array_dimensions.size()-1-j));
+                            // 调整元素位置
+                            elem_place -= ask_place * std::pow(array_dimensions.back(), (array_dimensions.size()-1-j));
+                            // 生成语句
+                            get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + std::to_string(ask_place) + "\n";
+                            // 调整curr_ptr
+                            curr_ptr = new_ptr;
+                        }
+                        // 存储语句
+                        get_str += "  store " + std::to_string(array_elements[i]) + ", " + curr_ptr + "\n";
+                    }
+                }
+                get_str += "\n";
+                array_dimensions.clear(); array_elements.clear();
+                return get_str;
+            }
+            else {array_dimensions.clear(); array_elements.clear(); return "";}
+        }
     }
     std::string GetUpward() const override {return ident;}
     int GetValue() const override {return init->GetValue();}
@@ -504,11 +750,86 @@ class ConstDefAST : public BaseAST {
 class ConstInitValAST : public BaseAST {
     public:
     std::unique_ptr<BaseAST> constexp;
-    std::string Dump() const override {return constexp->Dump();}
-    std::string GetUpward() const override {return constexp->GetUpward();}
-    int GetValue() const override {
-        return constexp->GetValue();
+    std::unique_ptr<BaseAST> list;
+    int ast_state; // 0为常数值, 1为空的数组初值, 2为有值的数组初值
+    std::string Dump() const override {
+        if (ast_state==0) {
+            if (fromup=="num") return constexp->Dump(); // 不关心纯数值的Dump
+            else if (fromup=="glob") assert(false); // 全局数组初始化不能是单个值
+            else if (fromup=="sum"||fromup=="part") {
+                // 将值放入元素表中
+                array_elements.push_back(constexp->GetValue());
+                return "";
+            }
+            else return "";
+        }
+        else if (ast_state==1) {
+            // 检查维度容器非空
+            assert(!array_dimensions.empty());
+            // 检查已有元素数量是否符合要求(被最后一维整除)
+            assert(array_elements.size() % array_dimensions.back() == 0);
+            // 计算补0标准
+            int fulfill = 1;
+            if (fromup=="glob") for(int i=0;i<array_dimensions.size();++i) fulfill *= array_dimensions[i]; // 全局情况取全部维度
+            else if (fromup=="sum") fulfill = array_dimensions.back(); // 局部情况取最后一维
+            else assert(false); // 其他情况报错
+            // 执行补0操作, 直接补充fulfill个0元素
+            for (int i = 0; i < fulfill; ++i) array_elements.push_back(0);
+            return "";
+        }
+        else if (ast_state==2) {
+            // 检查维度容器非空
+            assert(!array_dimensions.empty());
+            // 检查已有元素数量是否符合要求(被最后一维整除)
+            assert(array_elements.size() % array_dimensions.back() == 0);
+            // 计算补0标准
+            int fulfill = 1;
+            if (fromup=="glob") for(int i=0;i<array_dimensions.size();++i) fulfill *= array_dimensions[i]; // 全局情况取全部维度
+            else if (fromup=="sum") fulfill = array_dimensions.back(); // 局部情况取最后一维
+            else assert(false); // 其他情况报错
+            // 执行list
+            // list等级降级, 等级为glob, sum, part依次递减
+            if(fromup=="glob") list->fromup = "sum";
+            else if(fromup=="sum") list->fromup = "part";
+            else assert(false); // 否则报错
+            list->Dump();
+            // 执行补0操作
+            // 全局的场合补满
+            if(fromup=="glob") for(int i = array_elements.size(); i < fulfill; ++i) array_elements.push_back(0);
+            // 局部的场合补齐
+            else if(fromup=="sum") for(int i = 0; i < array_elements.size() % fulfill; ++i) array_elements.push_back(0);
+            return "";
+        }
+        else return "";
     }
+    std::string GetUpward() const override {
+        if (ast_state==0) return constexp->GetUpward();
+        else return ""; // 其他情况不需要考虑其GetUpward值
+    }
+    int GetValue() const override {
+        if (ast_state==0) return constexp->GetValue();
+        else return 0; // 其他情况不需要考虑其GetValue值
+    }
+};
+
+class ConstInitValListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> list;
+    std::unique_ptr<BaseAST> init;
+    int ast_state; // 1为单个init, 0为多个init
+    std::string Dump() const override {
+        if (ast_state==0) {
+            list->fromup = fromup; init->fromup = fromup;
+            return list->Dump() + init->Dump();
+        }
+        else if (ast_state==1) {
+            init->fromup = fromup;
+            return init->Dump();
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {return 0;}
 };
 
 class ConstExpAST : public BaseAST {
@@ -522,6 +843,7 @@ class ConstExpAST : public BaseAST {
 class LValAST : public BaseAST {
     public:
     std::string ident;
+    std::unique_ptr<BaseAST> list; // 支持数组索引
     int place; // 表明变量占用的临时符号
     // 根据ident搜索变量信息的函数
     // 注意: 这里存在一个暂时无法解决的bug
@@ -547,11 +869,54 @@ class LValAST : public BaseAST {
         else return curr_info;
     }
     std::string Dump() const override {
+        list->fromup = "use";
+        std::string idx_info = list->Dump(); // 执行一次list以录入信息
         varinfo found = IdentSearch();
         if (found.vartype==0) return "";
         else if (found.vartype==1) {
             if (fromup=="stmt") return "";
             else if (fromup=="exp") return "  %"+std::to_string(place)+" = load "+found.name+"\n";
+            else return "";
+        }
+        else if (found.vartype==3) {
+            // 表达式左值的情况
+            if (fromup=="stmt") {
+                std::string get_str = idx_info;
+                std::string curr_ptr = found.name;
+                std::string new_ptr = "";
+                for (int i=0; i<indexes.size(); ++i) {
+                    // 生成新指针
+                    new_ptr = "%write_ptr_" + std::to_string(place) + "_" + std::to_string(indexes.size()-i);
+                    // 生成指令
+                    get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + indexes[i] + "\n";
+                    // 更新curr_ptr
+                    curr_ptr = new_ptr;
+                }
+                // 加载指令
+                new_ptr = "%write_ptr_" + std::to_string(place) + "_" + std::to_string(0);
+                // get_str += "  " + new_ptr + " = load " + curr_ptr + "\n";
+                indexes.clear();
+                return get_str;
+            }
+            // 表达式右值的情况
+            else if (fromup=="exp") {
+                std::string get_str = idx_info;
+                std::string curr_ptr = found.name;
+                std::string new_ptr = "";
+                for (int i=0; i<indexes.size(); ++i) {
+                    // 生成新指针
+                    new_ptr = "%read_ptr_" + std::to_string(place) + "_" + std::to_string(indexes.size()-i);
+                    // 生成指令
+                    get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + indexes[i] + "\n";
+                    // 更新curr_ptr
+                    curr_ptr = new_ptr;
+                }
+                // 加载指令
+                new_ptr = "%read_ptr_" + std::to_string(place) + "_" + std::to_string(0);
+                get_str += "  " + new_ptr + " = load " + curr_ptr + "\n";
+                indexes.clear();
+                return get_str;
+            }
             else return "";
         }
         else return "";
@@ -564,14 +929,62 @@ class LValAST : public BaseAST {
             else if (fromup=="exp") return "%"+std::to_string(place); 
             else return "";
         }
+        else if (found.vartype==3) {
+            if (fromup=="stmt") return "%write_ptr_" + std::to_string(place) + "_" + std::to_string(1);
+            else if(fromup=="exp") return "%read_ptr_" + std::to_string(place) + "_" + std::to_string(0);
+            else return "";
+        }
         else return "";
     }
     int GetValue() const override {
         varinfo found = IdentSearch();
         if (found.vartype==0) return found.value;
         else if (found.vartype==1) return 0;
+        else if (found.vartype==3) return 0;
         else return 0;
     }
+};
+
+class ArrayListAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> list;
+    std::unique_ptr<BaseAST> idx;
+    int ast_state; // 表达式状态, 0为有索引, 1为空规则
+    std::string Dump() const override {
+        if (ast_state==0) {
+            list->fromup = fromup;
+            idx->fromup = fromup;
+            return list->Dump() + idx->Dump();
+        }
+        else if (ast_state==1) return "";
+        else return "";
+    }
+    std::string GetUpward() const override {return "";}
+    int GetValue() const override {
+        // 向上方节点传递本节点的状态(用数字表示)
+        return ast_state;
+    }
+};
+
+class ArrayIdxAST : public BaseAST {
+    public:
+    std::unique_ptr<BaseAST> exp;
+    std::string Dump() const override {
+        if (fromup=="def") {
+            // 将检查到的值加入vector尾部
+            array_dimensions.push_back(exp->GetValue());
+            return exp->Dump();
+        }
+        else if (fromup=="use") {
+            // 将检查到的值加入vector尾部, 注意用的数据结构与def不同
+            indexes.push_back(exp->GetUpward());
+            std::cout << "getupward:" << exp->GetUpward() << "\n";
+            return exp->Dump();
+        }
+        else return "";
+    }
+    std::string GetUpward() const override {return exp->GetUpward();}
+    int GetValue() const override {return exp->GetValue();}
 };
 
 // lv6: 添加对于if语句的支持
@@ -751,7 +1164,7 @@ class StmtAST : public BaseAST {
         if (ast_state==0) return expression->Dump() + "  ret " + expression->GetUpward()+"\n";
         else if (ast_state==1) {
             lval->fromup = "stmt"; // 表明为表达式左值
-            return expression->Dump() + "  store " + expression->GetUpward() + ", " + lval->GetUpward()+"\n";
+            return expression->Dump() + lval->Dump() + "  store " + expression->GetUpward() + ", " + lval->GetUpward()+"\n";
         }
         else if (ast_state==2) return expression->Dump();
         else if (ast_state==3) {
@@ -759,7 +1172,7 @@ class StmtAST : public BaseAST {
             return expression->Dump();
         }
         else if (ast_state==4) {
-            // todo: 设计while语句的Dump函数
+            // 设计while语句的Dump函数
             std::string get_str = "";
             // entry块的名字
             std::string entry_str = "\%while_entry_" + std::to_string(while_place);

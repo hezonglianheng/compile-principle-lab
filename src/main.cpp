@@ -36,6 +36,12 @@ unordered_map<std::string, varinfo> var_map;
 stack<int> while_stack;
 // 记录函数使用的参数信息
 vector<paraminfo> func_param_list;
+// 记录数组的维度信息
+vector<int> array_dimensions;
+// 记录数组初始化参数信息
+vector<int> array_elements;
+// 记录数组取值的标号信息
+vector<string> indexes;
 
 // 声明0号寄存器名称
 const string ZERO_REGISTER = "x0";
@@ -111,6 +117,10 @@ string Visit(const koopa_raw_jump_t jump);
 string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value);
 // 1-7: 增加访问全局申请内存指令的函数
 string Visit(const koopa_raw_global_alloc_t glob_alloc, const koopa_raw_value_t &value);
+// 1-11: 增加处理全局初始化的函数
+string Visit(const koopa_raw_aggregate_t aggregate);
+// 1-12: 增加处理数据指针的函数
+string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_t &value);
 // 增加计算函数所用栈空间和基本块所用栈空间的函数
 int CountStackSpace(const koopa_raw_slice_t &slice);
 // 增加计算类型占据栈空间的函数
@@ -126,6 +136,10 @@ int CountParams(const koopa_raw_type_t type);
 string DealFuncParams(const koopa_raw_slice_t &params, int func_size);
 // 处理单个参数的函数
 string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, const koopa_raw_value_t &value);
+// 专门处理lw语句生成的函数
+string DealLwOrder(string reg, int place);
+// 专门处理sw语句生成的函数
+string DealSwOrder(string reg, int place);
 
 int main(int argc, const char *argv[]) {
   // 解析命令行参数. 测试脚本/评测平台要求你的编译器能接收如下参数:
@@ -329,8 +343,9 @@ string Visit(const koopa_raw_value_t &value) {
     case KOOPA_RVT_ALLOC:
       // 11-30: 添加类型 alloc
       // alloc类型什么也不做(不行, 得进存储)
+      // todo: 区别处理alloc, 单个变量和数组变量还是不太一样的
       stack_place[value] = unused_tag;
-      unused_tag += 4;
+      unused_tag += CountStackSpace(value->ty);
       break;
     case KOOPA_RVT_LOAD:
       // 11-30: 添加类型 load
@@ -355,6 +370,14 @@ string Visit(const koopa_raw_value_t &value) {
     case KOOPA_RVT_GLOBAL_ALLOC:
       // 1-7: 添加新类型 全局申存 global alloc
       get_str = Visit(kind.data.global_alloc, value);
+      break;
+    case KOOPA_RVT_AGGREGATE:
+      // 1-11: 添加新类型 处理全局初始化
+      get_str = Visit(kind.data.aggregate);
+      break;
+    case KOOPA_RVT_GET_ELEM_PTR:
+      // 1-12: 添加新类型, 处理数组存储的访问
+      get_str = Visit(kind.data.get_elem_ptr, value);
       break;
     default:
       // cout << "unknown type";
@@ -467,7 +490,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     left_reg = registers[register_counter];
     // 计数器自增
     register_counter++;
-    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    // get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    get_str += DealLwOrder(left_reg, stack_place[inst.lhs]);
     // 更新reg寄存器
     reg = left_reg;
     // 更新left_str
@@ -479,7 +503,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     left_reg = registers[register_counter];
     // 计数器自增
     register_counter++;
-    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    // get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    get_str += DealLwOrder(left_reg, stack_place[inst.lhs]);
     // 更新reg寄存器
     reg = left_reg;
     // 更新left_str
@@ -492,7 +517,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     left_reg = registers[register_counter];
     // 计数器自增
     register_counter++;
-    get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    // get_str += "  lw   " + left_reg + ", " + left_str + "(sp)\n";
+    get_str += DealLwOrder(left_reg, stack_place[inst.lhs]);
     // 更新reg寄存器
     reg = left_reg;
     // 更新left_str
@@ -527,7 +553,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     right_str = to_string(stack_place[inst.rhs]);
     right_reg = registers[register_counter];
     register_counter++;
-    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    // get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    get_str += DealLwOrder(right_reg, stack_place[inst.rhs]);
     // 更新right寄存器
     reg = right_reg;
     // 更新right_str
@@ -537,7 +564,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     right_str = to_string(stack_place[inst.rhs]);
     right_reg = registers[register_counter];
     register_counter++;
-    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    // get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    get_str += DealLwOrder(right_reg, stack_place[inst.rhs]);
     // 更新right寄存器
     reg = right_reg;
     // 更新right_str
@@ -548,7 +576,8 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
     right_str = to_string(stack_place[inst.rhs]);
     right_reg = registers[register_counter];
     register_counter++;
-    get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    //get_str += "  lw   " + right_reg + ", " + right_str + "(sp)\n";
+    get_str += DealLwOrder(right_reg, stack_place[inst.rhs]);
     // 更新right寄存器
     reg = right_reg;
     // 更新right_str
@@ -641,7 +670,7 @@ string Visit(const koopa_raw_binary_t inst, const koopa_raw_value_t &value){
   }
   // 放入stack上
   stack_place[value] = unused_tag;
-  get_str += "  sw   " + reg + ", " + to_string(unused_tag) + "(sp)\n";
+  get_str += DealSwOrder(reg, unused_tag);
   unused_tag += CountStackSpace(value->ty);
   return get_str;
 }
@@ -651,7 +680,7 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
   string get_str = "";  // 需要返回的操作字符串
   int register_counter = 0; // 计数, 我怎么用寄存器的
   int src_place; // source的位置
-  int value_place; // 本指令对应的value指针在栈中的位置
+  // int value_place; // 本指令对应的value指针在栈中的位置
   const auto src_kind = load.src->kind;  // 加载值的类型
   string src_name = load.src->name; // 加载值的名称
   // 先进行读存操作
@@ -662,12 +691,13 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
         // 找不到就报错
         cout << "symbol not defined!";
         assert(false);
-    }
+      }
       else {
         // 否则记录位置, 执行读存操作
         src_place = stack_place[load.src];
-        get_str += "  lw   " + registers[register_counter] + ", " + to_string(src_place) + "(sp)\n";
-    }
+        // get_str += "  lw   " + registers[register_counter] + ", " + to_string(src_place) + "(sp)\n";
+        get_str += DealLwOrder(registers[register_counter], src_place);
+      }
       break;
     case KOOPA_RVT_GLOBAL_ALLOC:
       // load全局变量
@@ -676,15 +706,29 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
       // 之后从全局变量地址将值加载到寄存器(偏移量为0)
       get_str += "  lw   " + registers[register_counter] + ", " + "0(" + registers[register_counter] + ")\n";
       break;
+    case KOOPA_RVT_GET_ELEM_PTR:
+      if (stack_place.find(load.src)==stack_place.end()) assert(false);
+      else {
+        // load数组元素指针
+        // 加载指针的地址值
+        src_place = stack_place[load.src];
+        get_str += DealLwOrder(registers[register_counter], src_place);
+        // 从指针加载数值
+        get_str += "  lw   " + registers[register_counter] + ", " + "0(" + registers[register_counter] + ")\n";
+      }
+      break;
     default:
+      cout << "unknown load kind: " << src_kind.tag << "\n";
       assert(false);
       break;
   }
+  // 保存读取存储后获得的寄存器
+  string load_reg = registers[register_counter];
+  register_counter++;
   // 然后是写存操作
-  value_place = unused_tag;
-  stack_place[value] = value_place;
-  get_str += "  sw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
-  unused_tag += CountStackSpace(load.src->ty);
+  stack_place[value] = unused_tag;
+  get_str += DealSwOrder(load_reg, unused_tag);
+  unused_tag += CountStackSpace(value->ty);
   return get_str;
 }
 
@@ -698,12 +742,6 @@ string Visit(const koopa_raw_store_t store) {
   const auto value_kind = store.value->kind;  // 值的类型
   const auto dest_kind = store.dest->kind; // 存储标识符的类型
   string dest_name = store.dest->name;
-  /*
-  // (全局变量用)全局变量的名字
-  string dest_name = ""; 
-  if (dest_kind.tag==KOOPA_RVT_GLOBAL_ALLOC) dest_name = store.dest->name;
-  else dest_name = "";
-  */
   switch (value_kind.tag)
   {
   case KOOPA_RVT_INTEGER:
@@ -719,7 +757,8 @@ string Visit(const koopa_raw_store_t store) {
     }
     else {
       value_place = stack_place[store.value];
-      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      // get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
   case KOOPA_RVT_ALLOC:
@@ -730,7 +769,8 @@ string Visit(const koopa_raw_store_t store) {
     }
     else {
       value_place = stack_place[store.value];
-      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      // get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
   case KOOPA_RVT_LOAD:
@@ -741,7 +781,8 @@ string Visit(const koopa_raw_store_t store) {
     }
     else {
       value_place = stack_place[store.value];
-      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      // get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
   case KOOPA_RVT_CALL:
@@ -752,7 +793,8 @@ string Visit(const koopa_raw_store_t store) {
     }
     else {
       value_place = stack_place[store.value];
-      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      // get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
   case KOOPA_RVT_FUNC_ARG_REF:
@@ -763,7 +805,8 @@ string Visit(const koopa_raw_store_t store) {
     }
     else {
       value_place = stack_place[store.value];
-      get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      // get_str += "  lw   " + registers[register_counter] + ", " + to_string(value_place) + "(sp)\n";
+      get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
   default:
@@ -780,12 +823,12 @@ string Visit(const koopa_raw_store_t store) {
       // 找不到的场合, 分一个新位置
       dest_place = unused_tag;
       unused_tag += CountStackSpace(store.value->ty);  // 这里需要改吗?
-      get_str += "  sw   " + registers[register_counter] + ", " + to_string(dest_place) + "(sp)\n";
+      get_str += DealSwOrder(registers[register_counter], dest_place);
     }
     else {
       // 找到了的场合, 分一个旧位置
       dest_place = stack_place[store.dest];
-      get_str += "  sw   " + registers[register_counter] + ", " + to_string(dest_place) + "(sp)\n";
+      get_str += DealSwOrder(registers[register_counter], dest_place);
     }
     break;
   case KOOPA_RVT_GLOBAL_ALLOC:
@@ -795,8 +838,19 @@ string Visit(const koopa_raw_store_t store) {
     // 再将要存储的值写到全局变量中
     get_str += "  sw   " + registers[register_counter] + ", " + "0(" + registers[register_counter+1] + ")\n";
     break;
+  case KOOPA_RVT_GET_ELEM_PTR:
+    // getelemptr的场合注意处理
+    if (stack_place.find(store.dest)==stack_place.end()) assert(false);
+    else {
+      // 将计算好的指针的地址加载出来
+      get_str += DealLwOrder(registers[register_counter+1], stack_place[store.dest]);
+      // 将要存储的值放进去
+      get_str += "  sw   " + registers[register_counter] + ", " + "0(" + registers[register_counter+1] + ")\n";
+    }
+    break;
   default:
     // 否则报错
+    cout << "unknown dest kind: " << dest_kind.tag << "\n";
     assert(false);
     break;
   }
@@ -816,7 +870,8 @@ string Visit(const koopa_raw_branch_t branch) {
       break;
     default:
       // 处理条件
-      get_str += "  lw   " + cond_register + ", " + to_string(stack_place[branch.cond]) + "(sp)\n";
+      // get_str += "  lw   " + cond_register + ", " + to_string(stack_place[branch.cond]) + "(sp)\n";
+      get_str += DealLwOrder(cond_register, stack_place[branch.cond]);
       register_counter++;
       break;
   }
@@ -871,7 +926,8 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
           curr_str = Visit(value_ptr); // 访问数字的值
           // 生成指令: 放入寄存器和放入栈上
           get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
-          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+          get_str += DealSwOrder(registers[0], (i-8)*4);
+          //get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
         }
         break;
       case KOOPA_RVT_BINARY:
@@ -880,14 +936,16 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
           param_place = params_registers[i]; // 分配寄存器
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令
-          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+          // get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+          get_str += DealLwOrder(param_place, stack_place[value_ptr]);
         }
         else {
           param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令: 临时加载和放到栈上
           get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
-          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+          get_str += DealSwOrder(registers[0], (i-8)*4);
+          // get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
         }
         break;
       case KOOPA_RVT_LOAD:
@@ -896,14 +954,16 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
           param_place = params_registers[i]; // 分配寄存器
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令
-          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+          get_str += DealLwOrder(param_place, stack_place[value_ptr]);
+          // get_str += "  lw   " + param_place + ", " + curr_str + "\n";
         }
         else {
           param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令: 临时加载和放到栈上
           get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
-          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+          get_str += DealSwOrder(registers[0], (i-8)*4);
+          // get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
         }
         break;
       case KOOPA_RVT_CALL:
@@ -912,14 +972,16 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
           param_place = params_registers[i]; // 分配寄存器
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令
-          get_str += "  lw   " + param_place + ", " + curr_str + "\n";
+          get_str += DealLwOrder(param_place, stack_place[value_ptr]);
+          // get_str += "  lw   " + param_place + ", " + curr_str + "\n";
         }
         else {
           param_place = to_string((i-8)*4) + "(sp)"; // 分配栈上位置
           curr_str = to_string(stack_place[value_ptr]) + "(sp)"; // 访问运算的值
           // 生成指令: 临时加载和放到栈上
           get_str += "  li   " + registers[0] + ", " + curr_str + "\n";
-          get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
+          get_str += DealSwOrder(registers[0], (i-8)*4);
+          // get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
         }
         break;
       default:
@@ -966,11 +1028,184 @@ string Visit(const koopa_raw_global_alloc_t glob_alloc, const koopa_raw_value_t 
     /* 赋值的情况 */
     get_str += "  .word " + Visit(glob_alloc.init) + "\n";
     break;
+  case KOOPA_RVT_AGGREGATE:
+    // 处理全局初始化
+    get_str += Visit(glob_alloc.init);
+    break;
   default:
+    cout << "global alloc init kind: " << glob_alloc.init->kind.tag << "\n";
     assert(false);
     break;
   }
   get_str += "\n";
+  return get_str;
+}
+
+// 处理全局初始化
+string Visit(const koopa_raw_aggregate_t aggregate) {
+  string slice_str = "";
+  koopa_raw_value_t value_ptr;
+  for (size_t i = 0; i < aggregate.elems.len; ++i) {
+    auto ptr = aggregate.elems.buffer[i];
+    // 根据元素slice的种类决定操作, 若为value则继续, 否则报错
+    switch (aggregate.elems.kind) {
+      case KOOPA_RSIK_VALUE:
+        value_ptr = reinterpret_cast<koopa_raw_value_t>(ptr);
+        switch (value_ptr->kind.tag) {
+          case KOOPA_RVT_INTEGER:
+            // 数字的场合生成存储语句
+            slice_str += "  .word " + Visit(value_ptr->kind.data.integer) + "\n";
+            break;
+          case KOOPA_RVT_AGGREGATE:
+            // 递归aggregate
+            slice_str += Visit(value_ptr->kind.data.aggregate);
+            break;
+          default:
+            cout << "aggregate elem kind: " << value_ptr->kind.tag << "\n";
+            assert(false);
+            break;
+        }
+        break;
+      default:
+        cout << "aggregate kind:" << aggregate.elems.kind << "\n";
+        assert(false);
+        break;
+    }
+  }
+  return slice_str;
+}
+
+// 处理数据指针
+string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_t &value) {
+  string get_str = ""; // 结果字符串收集
+  int register_counter = 0; // 使用的寄存器的index
+  string src_name; // 全局变量的名字
+  string get_elem_reg;
+  string index_str; // 偏移值的字符串
+  string index_reg; // 偏移值的寄存器
+  // 处理来源src: 分成全局变量, 局部变量, 元素指针(处理多维数组)2类
+  get_elem_reg = registers[register_counter];
+  switch (get_elem_ptr.src->kind.tag) {
+    case KOOPA_RVT_GLOBAL_ALLOC:
+      // load全局变量
+      // 获得全局变量的名字
+      src_name = get_elem_ptr.src->name;
+      // 首先加载全局变量的地址
+      get_str += "  la   " + get_elem_reg + ", " + src_name.substr(1) + "\n";
+      break;
+    case KOOPA_RVT_ALLOC:
+      // 计算alloc的地址, 分成小于2048和大于2048两类
+      // 小于2048使用addi伪指令
+      if (stack_place[get_elem_ptr.src] < 2048) get_str += "  addi " + get_elem_reg + ", sp, " + to_string(stack_place[get_elem_ptr.src]) + "\n";
+      // 否则使用指令
+      else {
+        get_str += "  li   " + get_elem_reg + ", " + to_string(stack_place[get_elem_ptr.src]) + "\n";
+        get_str += "  add  " + get_elem_reg + ", sp, " + get_elem_reg + "\n";
+      }
+      break;
+    case KOOPA_RVT_GET_ELEM_PTR:
+      // 计算get_elem_ptr的地址, 分成小于2048和大于2048两类
+      // 小于2048使用addi伪指令
+      if (stack_place[get_elem_ptr.src] < 2048) get_str += "  addi " + get_elem_reg + ", sp, " + to_string(stack_place[get_elem_ptr.src]) + "\n";
+      // 否则使用指令
+      else {
+        get_str += "  li   " + get_elem_reg + ", " + to_string(stack_place[get_elem_ptr.src]) + "\n";
+        get_str += "  add  " + get_elem_reg + ", sp, " + get_elem_reg + "\n";
+      }
+      break;
+    default:
+      cout << "unknown elem source type: " << get_elem_ptr.src->kind.tag << "\n";
+      assert(false);
+      break;
+  }
+  register_counter++;  // 自增, 表明占用一个寄存器
+  // 计算偏移量
+  // 处理索引index: 模仿binary的情况
+  switch (get_elem_ptr.index->kind.tag) {
+    case KOOPA_RVT_INTEGER:
+      // 若为数字, 则看数字的值
+      index_str = Visit(get_elem_ptr.index);
+      if (index_str=="0") index_reg = ZERO_REGISTER;
+      else {
+        // 为非0值分配一个新的寄存器
+        index_reg = registers[register_counter];
+        // 把这个非0值放进去
+        get_str += "  li   " + index_reg + ", " + index_str + "\n";
+        // 寄存器计数器+1
+        register_counter++;
+      }
+      break;
+    case KOOPA_RVT_BINARY:
+      // 若为已有的二元运算, 则要找出该二元运算用的寄存器或二元运算结果的栈上位置
+      // 分配一个新的寄存器
+      index_reg = registers[register_counter];
+      // 计数器自增
+      register_counter++;
+      // 从栈帧加载到寄存器
+      // get_str += "  lw   " + index_reg + ", " + to_string(stack_place[get_elem_ptr.index]) + "(sp)\n";
+      get_str += DealLwOrder(index_reg, stack_place[get_elem_ptr.index]);
+      break;
+    case KOOPA_RVT_LOAD:
+      // 分配一个新的寄存器
+      index_reg = registers[register_counter];
+      // 计数器自增
+      register_counter++;
+      // 从栈帧加载到寄存器
+      // get_str += "  lw   " + index_reg + ", " + to_string(stack_place[get_elem_ptr.index]) + "(sp)\n";
+      get_str += DealLwOrder(index_reg, stack_place[get_elem_ptr.index]);
+      break;
+    case KOOPA_RVT_CALL:
+      // 分配一个新的寄存器
+      index_reg = registers[register_counter];
+      // 计数器自增
+      register_counter++;
+      // 从栈帧加载到寄存器
+      // get_str += "  lw   " + index_reg + ", " + to_string(stack_place[get_elem_ptr.index]) + "(sp)\n";
+      get_str += DealLwOrder(index_reg, stack_place[get_elem_ptr.index]);
+      break;
+    default:
+      cout << "unknown elem index type: " << get_elem_ptr.index->kind.tag << "\n";
+      assert(false);
+      break;
+    }
+  // 计算src大小
+  int src_size;
+  // 订正: 需要根据src类型确定size
+  switch (get_elem_ptr.src->kind.tag) {
+    // alloc类型看array的base
+    // ptr类型看ptr的base
+    case KOOPA_RVT_ALLOC:
+      cout << "base tag:" << get_elem_ptr.src->ty->data.array.base->data.array.base->tag << "\n";
+      src_size = CountStackSpace(get_elem_ptr.src->ty->data.array.base->data.array.base);
+      break;
+    case KOOPA_RVT_GLOBAL_ALLOC:
+      cout << "base tag:" << get_elem_ptr.src->ty->data.array.base->data.array.base->tag << "\n";
+      src_size = CountStackSpace(get_elem_ptr.src->ty->data.array.base->data.array.base);
+      break;
+    case KOOPA_RVT_GET_ELEM_PTR:
+      cout << "base tag:" << get_elem_ptr.src->ty->data.pointer.base->data.array.base->tag << "\n";
+      src_size = CountStackSpace(get_elem_ptr.src->ty->data.pointer.base->data.array.base);
+      break;
+    default:
+      cout << "unknown src kind: " << get_elem_ptr.src->kind.tag << "\n";
+      assert(false);
+      break;
+  }
+  // int src_size = CountStackSpace(get_elem_ptr.src->ty);
+  cout << "size of src: " << src_size << "\n";
+  // 加载到寄存器中
+  string src_size_reg = registers[register_counter];
+  register_counter++;
+  get_str += "  li   " + src_size_reg + ", " + to_string(src_size) + "\n";
+  // 计算偏移量
+  get_str += "  mul  " + index_reg + ", " + index_reg + ", " + src_size_reg + "\n";
+  // 计算getelemptr结果
+  get_str += "  add  " + get_elem_reg + ", " + get_elem_reg + ", " + index_reg + "\n";
+  // 将结果保存到栈帧
+  stack_place[value] = unused_tag;
+  get_str += DealSwOrder(get_elem_reg, unused_tag);
+  unused_tag += CountStackSpace(value->ty);
+  cout << "size of getelemptr: " << CountStackSpace(value->ty) << "\n";
   return get_str;
 }
 
@@ -980,7 +1215,6 @@ int CountStackSpace(const koopa_raw_slice_t &slice) {
   int curr_param_space = 0;
   koopa_raw_basic_block_t block_ptr;
   koopa_raw_value_t value_ptr;
-  // cout << slice.len << "\n";
   for (size_t i = 0; i < slice.len; ++i) {
     auto ptr = slice.buffer[i];
     switch (slice.kind) {
@@ -1000,7 +1234,7 @@ int CountStackSpace(const koopa_raw_slice_t &slice) {
         break;
       default:
         // 其他情况报错
-        cout << "unknown kind!";
+        cout << "unknown kind: " << slice.kind << "\n";
         assert(false);
         break;
     }
@@ -1036,8 +1270,13 @@ int CountStackSpace(const koopa_raw_type_t type){
     case KOOPA_RTT_FUNCTION:
       // 函数的分配不在这里进行
       break;
+    case KOOPA_RTT_ARRAY:
+      // 数组对应的type
+      // 应该算上(基底的大小 * 长度)
+      count_space += CountStackSpace(type->data.array.base) * type->data.array.len;
+      break;
     default:
-      cout << "unknown value type!";
+      cout << "unknown value type: " << type->tag << "\n";
       assert(false);
       break;
   }
@@ -1137,6 +1376,52 @@ string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, cons
     break;
   default:
     break;
+  }
+  return get_str;
+}
+
+// 专门处理lw语句生成的函数
+string DealLwOrder(string reg, int place) {
+  string get_str = "";
+  const int STANDARD = 2048;
+  // 小于2048: 单条指令
+  if (place < STANDARD) get_str += "  lw   " + reg + ", " + to_string(place) + "(sp)\n";
+  // 多于2048: 复数条指令
+  else {
+    string over_imm12_reg = params_registers[0]; // 借用一下a0
+    string reg_4_2048 = params_registers[1]; // 借用一下a1
+    int under_imm12 = place;
+    get_str += "  li   " + reg_4_2048 + ", 2048\n";
+    get_str += "  mv   " + over_imm12_reg + ", sp\n"; // 将sp的值移入a0
+    for (int i = place; i >= STANDARD; i -= STANDARD) {
+      get_str += "  add  " + over_imm12_reg + ", " + over_imm12_reg + ", " + reg_4_2048 + "\n";
+      under_imm12 -= STANDARD; // 减去大于2048的部分
+    }
+    // 小于2048正常加载
+    get_str += "  lw   " + reg + ", " + to_string(under_imm12) + "(" + over_imm12_reg + ")\n";
+  }
+  return get_str;
+}
+
+// 专门处理sw语句生成的函数
+string DealSwOrder(string reg, int place) {
+  string get_str = "";
+  const int STANDARD = 2048;
+  // 小于2048: 单条指令
+  if (place < STANDARD) get_str += "  sw   " + reg + ", " + to_string(place) + "(sp)\n";
+  // 多于2048: 复数条指令
+  else {
+    string over_imm12_reg = params_registers[0]; // 借用一下a0
+    string reg_4_2048 = params_registers[1]; // 借用一下a1
+    int under_imm12 = place;
+    get_str += "  li   " + reg_4_2048 + ", 2048\n";
+    get_str += "  mv   " + over_imm12_reg + ", sp\n"; // 将sp的值移入a0
+    for (int i = place; i >= STANDARD; i -= STANDARD) {
+      get_str += "  add  " + over_imm12_reg + ", " + over_imm12_reg + ", " + reg_4_2048 + "\n";
+      under_imm12 -= STANDARD; // 减去大于2048的部分
+    }
+    // 小于2048正常加载
+    get_str += "  sw   " + reg + ", " + to_string(under_imm12) + "(" + over_imm12_reg + ")\n";
   }
   return get_str;
 }

@@ -71,6 +71,8 @@ int unit_counter = 0;
 %type <ast_val> IfStmt IfOpenStmt IfCloseStmt
 // lv8定义新类型
 %type <ast_val> FuncFParams FuncFParam FuncRParams CompItem CompList
+// lv9 定义新类型
+%type <ast_val> ArrayIdx ArrayList ConstInitValList InitValList
 
 %%
 
@@ -217,14 +219,6 @@ BlockList
     ast->ast_state = 1;
     $$ = ast;
   }
-  /*
-  : BlockItem {
-    auto ast = new BlockListAST();
-    ast->item = unique_ptr<BaseAST>($1);
-    ast->ast_state = 1;
-    $$ = ast;
-  }
-  */
   | BlockList BlockItem {
     auto ast = new BlockListAST();
     ast->blocklist = unique_ptr<BaseAST>($1);
@@ -299,16 +293,20 @@ VarList
   ;
 
 VarDef
-  : IDENT {
+  : IDENT ArrayList {
+    // lv9修改: 支持数组定义
     auto ast = new VarDefAST();
     ast->ident = *unique_ptr<string>($1);
+    ast->list = unique_ptr<BaseAST>($2);
     ast->ast_state = 1;
     $$ = ast;
   }
-  | IDENT '=' InitVal {
+  | IDENT ArrayList '=' InitVal {
+    // lv9修改: 支持数组定义
     auto ast = new VarDefAST();
     ast->ident = *unique_ptr<string>($1);
-    ast->init = unique_ptr<BaseAST>($3);
+    ast->list = unique_ptr<BaseAST>($2);
+    ast->init = unique_ptr<BaseAST>($4);
     ast->ast_state = 0;
     $$ = ast;
   }
@@ -318,6 +316,34 @@ InitVal
   : Exp {
     auto ast = new InitValAST();
     ast->exp = unique_ptr<BaseAST>($1);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | '{' '}' {
+    auto ast = new InitValAST();
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | '{' InitValList '}' {
+    auto ast = new InitValAST();
+    ast->list = unique_ptr<BaseAST>($2);
+    ast->ast_state = 2;
+    $$ = ast;
+  }
+  ;
+
+InitValList
+  : InitVal {
+    auto ast = new InitValListAST();
+    ast->init = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | InitValList ',' InitVal {
+    auto ast = new InitValListAST();
+    ast->list = unique_ptr<BaseAST>($1);
+    ast->init = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
     $$ = ast;
   }
   ;
@@ -339,10 +365,12 @@ ConstList
   ;
 
 ConstDef 
-  : IDENT '=' ConstInitVal {
+  : IDENT ArrayList '=' ConstInitVal {
+    // lv9调整: 添加ArrayList以支持数组
     auto ast = new ConstDefAST();
     ast->ident = *unique_ptr<string>($1);
-    ast->init = unique_ptr<BaseAST>($3);
+    ast->list = unique_ptr<BaseAST>($2);
+    ast->init = unique_ptr<BaseAST>($4);
     $$ = ast;
   }
   ;
@@ -351,6 +379,34 @@ ConstInitVal
   : ConstExp {
     auto ast = new ConstInitValAST();
     ast->constexp = unique_ptr<BaseAST>($1);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  | '{' '}' {
+    auto ast = new ConstInitValAST();
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | '{' ConstInitValList '}' {
+    auto ast = new ConstInitValAST();
+    ast->list = unique_ptr<BaseAST>($2);
+    ast->ast_state = 2;
+    $$ = ast;
+  }
+  ;
+
+ConstInitValList
+  : ConstInitVal {
+    auto ast = new ConstInitValListAST();
+    ast->init = unique_ptr<BaseAST>($1);
+    ast->ast_state = 1;
+    $$ = ast;
+  }
+  | ConstInitValList ',' ConstInitVal {
+    auto ast = new ConstInitValListAST();
+    ast->list = unique_ptr<BaseAST>($1);
+    ast->init = unique_ptr<BaseAST>($3);
+    ast->ast_state = 0;
     $$ = ast;
   }
   ;
@@ -364,11 +420,37 @@ ConstExp
   ;
 
 LVal
-  : IDENT {
+  : IDENT ArrayList {
     auto ast = new LValAST();
     ast->ident = *unique_ptr<string>($1);
+    ast->list = unique_ptr<BaseAST>($2);
     ast->place = exp_counter;
     exp_counter++;
+    $$ = ast;
+  }
+  ;
+
+// 数组定义或使用中的
+ArrayList
+  : /*empty rule*/ {
+    auto ast = new ArrayListAST();
+    ast->ast_state = 1;  // 1表示空规则
+    $$ = ast;
+  }
+  | ArrayList ArrayIdx {
+    auto ast = new ArrayListAST();
+    ast->list = unique_ptr<BaseAST>($1);
+    ast->idx = unique_ptr<BaseAST>($2);
+    ast->ast_state = 0;
+    $$ = ast;
+  }
+  ;
+
+// 数组定义或使用中的单个元素
+ArrayIdx
+  : '[' Exp ']' {
+    auto ast = new ArrayIdxAST();
+    ast->exp = unique_ptr<BaseAST>($2);
     $$ = ast;
   }
   ;
