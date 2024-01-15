@@ -40,7 +40,7 @@ vector<paraminfo> func_param_list;
 vector<int> array_dimensions;
 // 记录数组初始化参数信息
 vector<int> array_elements;
-// 记录数组取值的标号信息
+// 记录数组取值的标号信息(Dump用)
 vector<string> indexes;
 
 // 声明0号寄存器名称
@@ -1335,7 +1335,10 @@ string DealFuncParams(const koopa_raw_slice_t &params, int func_size) {
       get_str += DealFuncParams(value_ptr->ty, func_size, i, value_ptr);
     }
     // 否则报错
-    else assert(false);
+    else {
+      cout << "unknown param kind: " << params.kind;
+      assert(false);
+    }
   }
   return get_str;
 }

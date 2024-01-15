@@ -198,6 +198,13 @@ FuncFParam
     ast->ident = *unique_ptr<string>($2);
     $$ = ast;
   }
+  | INT IDENT '[' ']' ArrayList {
+    auto ast = new FuncFParamAST();
+    ast->btype = "*int";
+    ast->ident = *unique_ptr<string>($2);
+    ast->list = unique_ptr<BaseAST>($5);
+    $$ = ast;
+  }
   ;
 
 Block
@@ -557,8 +564,12 @@ Stmt
     ast->expression = unique_ptr<BaseAST>($2);
     ast->ast_state = 0;
     $$ = ast;
-    //auto number = unique_ptr<string>($2);
-    //$$ = new string("return " + *number + ";");
+  }
+  | RETURN ';' {
+    auto ast = new StmtAST();
+    ast->word = "return";
+    ast->ast_state = 7;
+    $$ = ast;
   }
   ;
 

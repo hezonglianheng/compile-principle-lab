@@ -1,7 +1,6 @@
 # ifndef AST_H
 # define AST_H
 # pragma once //只引用一次
-// todo: 对函数调用的调整
 
 # include <memory>
 # include <string>
@@ -17,18 +16,21 @@
 
 // 尝试定义新的类型, 用于承接变量的信息
 struct varinfo {
-    int vartype; // 0为const, 1为var, 2为函数, 3为数组
+    int vartype; // 0为const, 1为var, 2为函数, 3为数组, 4为指针
     std::string ident;  // 变量标号
     int layer; // 表明ident所属的层级, -1为函数参数变量, -2为全局变量(两个特殊层级)
     int value; // const的计算值
     std::string name;  // 这个是变量名称 这里可能有点问题. 先写着, 报错再说
     int ret_type; // 0为void(无返回), 1为int(有返回)
+    int dimension; // 数组或指针型使用, 记录其维度数量
 };
 
 struct paraminfo {
-    int paramtype; // 0为普通参数, 1用来处理数组
+    int paramtype; // 0为普通参数, 1用来处理指针类型
     std::string ident;
     std::string name;
+    std::string ptr_type;  // 指针的具体类型
+    int dimension; // 指针型使用, 记录其维度数量
 };
 
 // 记录const及其值的map
@@ -47,7 +49,7 @@ extern int layer_count;
 extern std::vector<int> array_dimensions;
 // 记录数组初始化参数信息
 extern std::vector<int> array_elements;
-// 记录数组取值的标号信息
+// 记录数组取值的标号信息(在Dump函数中使用)
 extern std::vector<std::string> indexes;
 
 class BaseAST {
@@ -181,15 +183,24 @@ class FuncDefAST : public BaseAST {
     if (ast_state==1) {
         // 遍历函数变量表
         for(int i=0;i<func_param_list.size();++i){
+            varinfo newinfo;
+            std::string key = func_param_list[i].ident + "_param";
+            newinfo.ident = func_param_list[i].ident;
+            newinfo.layer = params_layer; // 表明为函数变量层
+            newinfo.name = "%" + key; // 使用的名字
             if (func_param_list[i].paramtype==0) {
-                varinfo newinfo;
-                std::string key = func_param_list[i].ident + "_param";
-                newinfo.ident = func_param_list[i].ident;
-                newinfo.layer = params_layer; // 表明为函数变量层
+                // 对于普通参数翻译为普通变量类型
                 newinfo.vartype = 1; // 视为变量
-                newinfo.name = "%" + key; // 使用的名字
                 var_map[key] = newinfo; // 放入函数符号表
                 get_str += "  " + newinfo.name + " = alloc i32\n"; // 申请存储语句
+                get_str += "  store " + func_param_list[i].name + ", " + newinfo.name + "\n"; // 放入存储语句
+            }
+            else if (func_param_list[i].paramtype==1) {
+                // 对于指针类型翻译为指针类型
+                newinfo.vartype = 4; // 视为变量
+                newinfo.dimension = func_param_list[i].dimension; // 记录维度数
+                var_map[key] = newinfo; // 放入函数符号表
+                get_str += "  " + newinfo.name + " = alloc " + func_param_list[i].ptr_type + "\n";
                 get_str += "  store " + func_param_list[i].name + ", " + newinfo.name + "\n"; // 放入存储语句
             }
             else;
@@ -246,15 +257,39 @@ class FuncFParamAST : public BaseAST {
     public:
     std::string btype;
     std::string ident;
+    std::unique_ptr<BaseAST> list;
     std::string Dump() const override {
+        paraminfo pinfo; // 记录函数参数信息
+        std::string name = "@"+ident;
+        pinfo.ident = ident;
+        pinfo.name = name;
         if (btype=="int") {
-            paraminfo pinfo; // 记录函数参数信息
-            std::string name = "@"+ident;
             pinfo.paramtype = 0;
-            pinfo.ident = ident;
-            pinfo.name = name;
             func_param_list.push_back(pinfo);
             return name + ": i32";
+        }
+        else if (btype=="*int") {
+            pinfo.paramtype = 1; // 表明为指针类型
+            list->fromup = "def";
+            list->Dump();
+            // 若array_dimensions为空则是纯指针
+            if (array_dimensions.empty()) {
+                pinfo.ptr_type = "*i32";
+                pinfo.dimension = 1; // 维度数为1
+            }
+            // 否则是数组指针
+            else {
+                std::string datatype = "i32";
+                // 逆序生成数组的数据类型
+                for (int i = array_dimensions.size()-1; i >= 0; --i) {
+                    datatype = "[" + datatype + ", " + std::to_string(array_dimensions[i]) + "]";
+                }
+                pinfo.ptr_type = "*" + datatype;
+                pinfo.dimension = array_dimensions.size() + 1; // 维度数为记录的dimension+1
+            }
+            func_param_list.push_back(pinfo);
+            array_dimensions.clear();
+            return name + ": " + pinfo.ptr_type;
         }
         else return "";
     }
@@ -452,6 +487,7 @@ class VarDefAST : public BaseAST {
                 if (layer==layer_count) {name += "_glob"; get_str += "global " + name + " = alloc ";}
                 else {name += "_" + std::to_string(layer); get_str += "  " + name + " = alloc ";}
                 arrayinfo.name = name; // 记录后续使用的时候使用的名称
+                arrayinfo.dimension = array_dimensions.size(); // 记录长度信息
                 var_map[name] = arrayinfo; // 加入符号表
                 // 记录数组的数据类型
                 std::string datatype = "i32";
@@ -685,6 +721,7 @@ class ConstDefAST : public BaseAST {
                 if (layer==layer_count) {name += "_glob"; get_str += "global " + name + " = alloc ";}
                 else {name += "_" + std::to_string(layer); get_str += "  " + name + " = alloc ";}
                 arrayinfo.name = name; // 记录后续使用的时候使用的名称
+                arrayinfo.dimension = array_dimensions.size(); // 记录数组维度数量
                 var_map[name] = arrayinfo; // 加入符号表
                 // 记录数组的数据类型
                 std::string datatype = "i32";
@@ -855,7 +892,6 @@ class LValAST : public BaseAST {
         for (auto it=var_map.begin();it!=var_map.end();++it) {
             // 添加: 考虑排除搜寻到函数的情况
             if (it->second.ident==ident && it->second.vartype != 2) {
-                // todo: 解决设计的时候发生的冲突
                 // 设计的时候, 外层的layer大, 内层的layer小
                 // 而全局变量的layer是小的复数
                 if (it->second.layer < check_layer) {
@@ -869,8 +905,6 @@ class LValAST : public BaseAST {
         else return curr_info;
     }
     std::string Dump() const override {
-        list->fromup = "use";
-        std::string idx_info = list->Dump(); // 执行一次list以录入信息
         varinfo found = IdentSearch();
         if (found.vartype==0) return "";
         else if (found.vartype==1) {
@@ -878,46 +912,49 @@ class LValAST : public BaseAST {
             else if (fromup=="exp") return "  %"+std::to_string(place)+" = load "+found.name+"\n";
             else return "";
         }
-        else if (found.vartype==3) {
-            // 表达式左值的情况
-            if (fromup=="stmt") {
-                std::string get_str = idx_info;
-                std::string curr_ptr = found.name;
-                std::string new_ptr = "";
-                for (int i=0; i<indexes.size(); ++i) {
-                    // 生成新指针
-                    new_ptr = "%write_ptr_" + std::to_string(place) + "_" + std::to_string(indexes.size()-i);
-                    // 生成指令
-                    get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + indexes[i] + "\n";
-                    // 更新curr_ptr
-                    curr_ptr = new_ptr;
-                }
-                // 加载指令
-                new_ptr = "%write_ptr_" + std::to_string(place) + "_" + std::to_string(0);
-                // get_str += "  " + new_ptr + " = load " + curr_ptr + "\n";
-                indexes.clear();
-                return get_str;
+        else if (found.vartype==3 || found.vartype==4) {
+            int other_indexes = indexes.size(); // 已有情形下的indexes长度
+            list->fromup = "use";
+            std::string idx_info = list->Dump(); // 执行一次list以录入信息
+            std::string get_str = idx_info;
+            std::string curr_ptr = found.name;
+            std::string new_ptr = "";
+            // 如果vartype==4(指针的指针, **), 那么需要先行load一次, 变为*
+            if (found.vartype==4) {
+                new_ptr = "%ptr_load_param_" + std::to_string(place);
+                get_str += "  %ptr_load_param_" + std::to_string(place) + " = load " + curr_ptr + "\n";
+                curr_ptr = new_ptr;
             }
-            // 表达式右值的情况
-            else if (fromup=="exp") {
-                std::string get_str = idx_info;
-                std::string curr_ptr = found.name;
-                std::string new_ptr = "";
-                for (int i=0; i<indexes.size(); ++i) {
-                    // 生成新指针
-                    new_ptr = "%read_ptr_" + std::to_string(place) + "_" + std::to_string(indexes.size()-i);
-                    // 生成指令
-                    get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + indexes[i] + "\n";
-                    // 更新curr_ptr
-                    curr_ptr = new_ptr;
+            int sentence_num; // 需要生成的句子数量
+            // 左值: 语句数量==标号数量
+            if (fromup=="stmt") sentence_num = list->GetValue();
+            // 右值比左值多一个语句
+            else if (fromup=="exp") sentence_num = list->GetValue() + 1;
+            else assert(false); // 否则报错
+            for (int i = 0; i < sentence_num; ++i) {
+                // 生成新指针
+                new_ptr = "%ptr_" + std::to_string(place) + "_" + std::to_string(i);
+                // 生成指令
+                // 如果i == found.dimension(即取到了所有的维度), 使用load指令
+                if (i == found.dimension) {get_str += "  " + new_ptr + " = load " + curr_ptr + "\n";}
+                // 否则使用getelemptr/getptr指令
+                else {
+                    std::string my_offset; // 使用这些指令时确定的偏移量
+                    if (other_indexes + i  < indexes.size()) my_offset = indexes[other_indexes + i];
+                    else my_offset = "0";
+                    // vartype == 4 && i == 0时需要做特别处理: 引用getptr指令
+                    if (found.vartype == 4 && i == 0) get_str += "  " + new_ptr + + " = getptr " + curr_ptr + ", " + my_offset + "\n";
+                    else get_str += "  " + new_ptr + " = getelemptr " + curr_ptr + ", " + my_offset + "\n";
                 }
-                // 加载指令
-                new_ptr = "%read_ptr_" + std::to_string(place) + "_" + std::to_string(0);
-                get_str += "  " + new_ptr + " = load " + curr_ptr + "\n";
-                indexes.clear();
-                return get_str;
+                // 更新curr_ptr
+                curr_ptr = new_ptr;
             }
-            else return "";
+            // 将新加入的index去除(一共list->GetValue()个)
+            // indexes.clear();
+            for (int n = 0; n < list->GetValue(); ++n) {
+                indexes.pop_back();
+            }
+            return get_str;
         }
         else return "";
     }
@@ -929,10 +966,19 @@ class LValAST : public BaseAST {
             else if (fromup=="exp") return "%"+std::to_string(place); 
             else return "";
         }
-        else if (found.vartype==3) {
-            if (fromup=="stmt") return "%write_ptr_" + std::to_string(place) + "_" + std::to_string(1);
-            else if(fromup=="exp") return "%read_ptr_" + std::to_string(place) + "_" + std::to_string(0);
-            else return "";
+        else if (found.vartype==3 || found.vartype==4) {
+            std::string get_str = "";
+            if (fromup=="stmt") {
+                if (list->GetValue()==0) {
+                    if (found.vartype==3) get_str += found.name;
+                    else if (found.vartype==4) get_str += "%ptr_load_param_" + std::to_string(place);
+                    else assert(false);
+                }
+                else get_str += "%ptr_" + std::to_string(place) + "_" + std::to_string(list->GetValue()-1);
+            }
+            else if (fromup=="exp") get_str += "%ptr_" + std::to_string(place) + "_" + std::to_string(list->GetValue());
+            else assert(false);
+            return get_str;
         }
         else return "";
     }
@@ -941,6 +987,7 @@ class LValAST : public BaseAST {
         if (found.vartype==0) return found.value;
         else if (found.vartype==1) return 0;
         else if (found.vartype==3) return 0;
+        else if (found.vartype==4) return 0;
         else return 0;
     }
 };
@@ -961,8 +1008,9 @@ class ArrayListAST : public BaseAST {
     }
     std::string GetUpward() const override {return "";}
     int GetValue() const override {
-        // 向上方节点传递本节点的状态(用数字表示)
-        return ast_state;
+        // ArrayList的长度
+        if (ast_state==0) return list->GetValue() + idx->GetValue();
+        else return 0;
     }
 };
 
@@ -978,13 +1026,16 @@ class ArrayIdxAST : public BaseAST {
         else if (fromup=="use") {
             // 将检查到的值加入vector尾部, 注意用的数据结构与def不同
             indexes.push_back(exp->GetUpward());
-            std::cout << "getupward:" << exp->GetUpward() << "\n";
+            // std::cout << "getupward:" << exp->GetUpward() << "\n";
             return exp->Dump();
         }
         else return "";
     }
     std::string GetUpward() const override {return exp->GetUpward();}
-    int GetValue() const override {return exp->GetValue();}
+    int GetValue() const override {
+        // 每次增加1, 当作计数器使用
+        return 1;
+    }
 };
 
 // lv6: 添加对于if语句的支持
@@ -1127,8 +1178,8 @@ class StmtAST : public BaseAST {
     std::unique_ptr<BaseAST> lval;
     std::unique_ptr<BaseAST> expression;
     std::unique_ptr<BaseAST> statement;
-    int ast_state;  // 0表示return语句, 1表示赋值语句, 2表示单纯求值语句(得扔), 3表示新的block
-    // 4表示while语句, 5表示break语句, 6表示continue语句
+    int ast_state;  // 0表示return语句(带返回值), 1表示赋值语句, 2表示单纯求值语句(得扔), 3表示新的block
+    // 4表示while语句, 5表示break语句, 6表示continue语句, 7表示return语句(不带返回值)
     int while_place; // while的位置
     std::string GetUpward() const override {
         if (ast_state==0) // return expression->GetUpward(); 
@@ -1149,22 +1200,19 @@ class StmtAST : public BaseAST {
         else if (ast_state==4) return expression->GetUpward();
         else if (ast_state==5) /*return "break";*/ return "return";
         else if (ast_state==6) /*return "continue";*/ return "return";
+        else if (ast_state==7) return "return"; // 和带值返回相同
         else return "";
     }
     std::string Dump() const override {
-        //std::cout << "StmtAST {";
-        //number->Dump();
-        //std::cout << "}";
-        // std::string koopa_word;
-        // if (word=="return") koopa_word = " ret ";
-        // else return " ";
         // 收集两条路线的上传结果
-        // todo: 此处的entry可能需要改变位置了
-        // return "\%entry:\n" + expression->Dump() + koopa_word + expression->GetUpward();
+        // 此处的entry可能需要改变位置了
         if (ast_state==0) return expression->Dump() + "  ret " + expression->GetUpward()+"\n";
         else if (ast_state==1) {
+            std::string get_str;
             lval->fromup = "stmt"; // 表明为表达式左值
-            return expression->Dump() + lval->Dump() + "  store " + expression->GetUpward() + ", " + lval->GetUpward()+"\n";
+            get_str += expression->Dump() + lval->Dump() + "  store " + expression->GetUpward() + ", " + lval->GetUpward() + "\n";
+            // RIGHT_LABEL = "";
+            return get_str;
         }
         else if (ast_state==2) return expression->Dump();
         else if (ast_state==3) {
@@ -1218,6 +1266,7 @@ class StmtAST : public BaseAST {
                 return "  jump \%while_entry_" + std::to_string(curr_while_place) + "\n";
             }
         }
+        else if (ast_state==7) return "  ret \n";
         else return "";
     };
     int GetValue() const override {
@@ -1234,6 +1283,7 @@ class StmtAST : public BaseAST {
         else if (ast_state==4) return expression->GetValue();
         else if (ast_state==5) return 0;
         else if (ast_state==6) return 0;
+        else if (ast_state==7) return 0;
         else return 0;
     }
 };
@@ -1600,10 +1650,7 @@ class UnaryExpAST : public BaseAST {
     // 存放一元表达式或者基础表达式
     std::unique_ptr<BaseAST> son_tree;
     // 设置表达式状态
-    // 状态0为一元表达式递归
-    // 状态1为进入基础表达式
-    // 状态2为有参数function call
-    // 状态3为无参数function call
+    // 状态0为一元表达式递归, 1为进入基础表达式, 2为有参数function call, 3为无参数function call
     int ast_state;
     // 占用的标识符号
     int place;
@@ -1629,8 +1676,6 @@ class UnaryExpAST : public BaseAST {
     };
     std::string Dump() const override {
         if (ast_state==0) {
-            // todo: 如何调整?
-            // return son_tree->Dump() + "\n " + "%" + std::to_string(place) + " = " + unary_op->Dump() + son_tree->GetUpward();
             // 若为+则保持结果字符串不动
             if (op=="+") return son_tree->Dump();
             // 若为-!则添加式子
@@ -1701,8 +1746,11 @@ class PrimaryExpAST : public BaseAST {
     std::string GetUpward() const override {
         if (ast_state==0) return son_tree->GetUpward();
         else if (ast_state==1) {
+            std::string get_str;
             son_tree->fromup = "exp"; // 表明为表达式右值
-            return son_tree->GetUpward();
+            get_str = son_tree->GetUpward();
+            // RIGHT_LABEL = ""; // 更新RIGHT_LABEL
+            return get_str;
         }
         else return "";
     };
@@ -1743,7 +1791,6 @@ class FuncRParamsAST : public BaseAST {
     int GetValue() const override {return 0;}
 };
 
-// 这个也是必要的！这里是文档的typo！助教你没有心！
 class NumberAST : public BaseAST {
     public:
     int int_const; //这里用整数形式
@@ -1752,11 +1799,6 @@ class NumberAST : public BaseAST {
         return std::to_string(int_const);
     };
     std::string Dump() const override {
-        //std::cout << "NumberAST {";
-        //std::cout << int_const;
-        //std::cout << "}";
-        //std::string const_str = std::to_string(int_const);
-        //return const_str;
         // 利用upward参数传递值, 这一函数废弃
         // 将数作为upward值上传
         return "";
