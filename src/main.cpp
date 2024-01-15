@@ -121,6 +121,8 @@ string Visit(const koopa_raw_global_alloc_t glob_alloc, const koopa_raw_value_t 
 string Visit(const koopa_raw_aggregate_t aggregate);
 // 1-12: 增加处理数据指针的函数
 string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_t &value);
+// 1-15: 处理另一种指针
+string Visit(const koopa_raw_get_ptr_t get_ptr, const koopa_raw_value_t &value);
 // 增加计算函数所用栈空间和基本块所用栈空间的函数
 int CountStackSpace(const koopa_raw_slice_t &slice);
 // 增加计算类型占据栈空间的函数
@@ -286,7 +288,7 @@ string Visit(const koopa_raw_function_t &func) {
   unused_tag += param_area; // 未使用位置调整到存储调用函数的参数的栈帧位置的上方(?)
   get_str += MoveFuncPointer(-use_space);
   // 如果调用需要将ra寄存器值保存起来
-  if (call_flag) get_str += "  sw   ra, " + to_string(use_space-4) + "(sp)\n";
+  if (call_flag) get_str += DealSwOrder("ra", use_space-4);
   // 将参数从ax寄存器等地方取出来
   get_str += DealFuncParams(func->params, function_size);
   // 访问所有基本块
@@ -379,8 +381,11 @@ string Visit(const koopa_raw_value_t &value) {
       // 1-12: 添加新类型, 处理数组存储的访问
       get_str = Visit(kind.data.get_elem_ptr, value);
       break;
+    case KOOPA_RVT_GET_PTR:
+      get_str = Visit(kind.data.get_ptr, value);
+      break;
     default:
-      // cout << "unknown type";
+      cout << "unknown type" << kind.tag << "\n";
       // 其他类型暂时遇不到
       assert(false);
   }
@@ -404,18 +409,18 @@ string Visit(const koopa_raw_return_t inst){
     case KOOPA_RVT_BINARY:
       // ret_str = register_distribution[ret_value];
       ret_str = to_string(stack_place[ret_value]);
-      get_str += "  lw   a0, " + ret_str + "(sp)\n";
+      get_str += DealLwOrder("a0", stack_place[ret_value]);
       break;
     case KOOPA_RVT_LOAD:
       ret_str = to_string(stack_place[ret_value]);
-      get_str += "  lw   a0, " + ret_str + "(sp)\n";
+      get_str += DealLwOrder("a0", stack_place[ret_value]);
       break;
     default:
       break;
     }
   }
   // 加载ra的值
-  if (call_flag) get_str += "  lw   ra, " + to_string(function_size-4) + "(sp)\n";
+  if (call_flag) get_str += DealLwOrder("ra", function_size-4);
   // 移动sp位置
   get_str += MoveFuncPointer(function_size);
   get_str += "  ret\n\n";
@@ -706,6 +711,7 @@ string Visit(const koopa_raw_load_t load, const koopa_raw_value_t &value) {
       // 之后从全局变量地址将值加载到寄存器(偏移量为0)
       get_str += "  lw   " + registers[register_counter] + ", " + "0(" + registers[register_counter] + ")\n";
       break;
+    case KOOPA_RVT_GET_PTR: // 增加对getptr语句的处理
     case KOOPA_RVT_GET_ELEM_PTR:
       if (stack_place.find(load.src)==stack_place.end()) assert(false);
       else {
@@ -838,6 +844,7 @@ string Visit(const koopa_raw_store_t store) {
     // 再将要存储的值写到全局变量中
     get_str += "  sw   " + registers[register_counter] + ", " + "0(" + registers[register_counter+1] + ")\n";
     break;
+  case KOOPA_RVT_GET_PTR:
   case KOOPA_RVT_GET_ELEM_PTR:
     // getelemptr的场合注意处理
     if (stack_place.find(store.dest)==stack_place.end()) assert(false);
@@ -1003,7 +1010,7 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
     value_place = unused_tag;
     stack_place[value] = value_place;
     // 生成指令, 将返回值放入栈上
-    get_str += "  sw   a0, " + to_string(value_place) + "(sp)\n";
+    get_str += DealSwOrder("a0", value_place);
     unused_tag += CountStackSpace(value->ty);
     break;
   default:
@@ -1103,9 +1110,11 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
         get_str += "  add  " + get_elem_reg + ", sp, " + get_elem_reg + "\n";
       }
       break;
+    case KOOPA_RVT_GET_PTR: // 添加对于getptr的处理
     case KOOPA_RVT_GET_ELEM_PTR:
       // 先将来源加载到寄存器中
-      get_str += DealLwOrder(registers[register_counter+1], stack_place[get_elem_ptr.src]);
+      get_str += DealLwOrder(registers[register_counter], stack_place[get_elem_ptr.src]);
+      // get_str += DealLwOrder(registers[register_counter+1], stack_place[get_elem_ptr.src]);
       break;
     default:
       cout << "unknown elem source type: " << get_elem_ptr.src->kind.tag << "\n";
@@ -1177,6 +1186,10 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
     case KOOPA_RVT_GET_ELEM_PTR:
       src_size = CountStackSpace(get_elem_ptr.src->ty->data.pointer.base->data.array.base);
       break;
+    case KOOPA_RVT_GET_PTR:
+      cout << "get ptr tag: " << get_elem_ptr.src->ty->data.pointer.base->tag << "\n";
+      src_size = CountStackSpace(get_elem_ptr.src->ty->data.pointer.base->data.pointer.base);
+      break;
     default:
       cout << "unknown src kind: " << get_elem_ptr.src->kind.tag << "\n";
       assert(false);
@@ -1197,6 +1210,85 @@ string Visit(const koopa_raw_get_elem_ptr_t get_elem_ptr, const koopa_raw_value_
   get_str += DealSwOrder(get_elem_reg, unused_tag);
   unused_tag += CountStackSpace(value->ty);
   cout << "size of getelemptr: " << CountStackSpace(value->ty) << "\n";
+  return get_str;
+}
+
+// 1-15: 处理另一种指针运算
+string Visit(const koopa_raw_get_ptr_t get_ptr, const koopa_raw_value_t &value) {
+  string get_str = ""; // 结果字符串收集
+  int register_counter = 0; // 使用的寄存器的index
+  string src_name; // 全局变量的名字
+  string src_reg; // 全局变量的寄存器
+  string index_str; // 偏移值的字符串
+  string index_reg; // 偏移值的寄存器
+  // 处理来源(将来源加载到寄存器中)
+  src_reg = registers[register_counter]; // 确定一个寄存器
+  switch (get_ptr.src->kind.tag) {
+    // 从koopa生成来看getptr一般跟在load语句之后
+    case KOOPA_RVT_LOAD:
+      get_str += DealLwOrder(src_reg, stack_place[get_ptr.src]);
+      break;
+    default:
+      // 其他情况报错
+      cout << "unknown getptr source kind: " << get_ptr.src->kind.tag << "\n";
+      assert(false);
+  }
+  register_counter++; // 表明占用寄存器自增
+  switch (get_ptr.index->kind.tag) {
+    case KOOPA_RVT_INTEGER:
+      // 若为数字, 则看数字的值
+      index_str = Visit(get_ptr.index);
+      if (index_str=="0") index_reg = ZERO_REGISTER;
+      else {
+        // 为非0值分配一个新的寄存器
+        index_reg = registers[register_counter];
+        // 把这个非0值放进去
+        get_str += "  li   " + index_reg + ", " + index_str + "\n";
+        // 寄存器计数器+1
+        register_counter++;
+      }
+      break;
+    case KOOPA_RVT_BINARY:
+    case KOOPA_RVT_LOAD:
+    case KOOPA_RVT_CALL:
+      // 上述情况都需要找到栈帧位置
+      // 分配一个新的寄存器
+      index_reg = registers[register_counter];
+      // 计数器自增
+      register_counter++;
+      // 从栈帧加载到寄存器
+      get_str += DealLwOrder(index_reg, stack_place[get_ptr.index]);
+      break;
+    default:
+      cout << "unknown elem index type: " << get_ptr.index->kind.tag << "\n";
+      assert(false);
+      break;
+    }
+  // 计算src大小
+  int src_size;
+  // 需要根据src类型确定size
+  switch (get_ptr.src->kind.tag) {
+    case KOOPA_RVT_LOAD:
+      src_size = CountStackSpace(get_ptr.src->ty->data.pointer.base);
+      cout << "base tag size: " << src_size << "\n";
+      break;
+    default:
+      cout << "unknown src kind: " << get_ptr.src->kind.tag << "\n";
+      assert(false);
+      break;
+  }
+  // 加载到寄存器中
+  string src_size_reg = registers[register_counter];
+  register_counter++;
+  get_str += "  li   " + src_size_reg + ", " + to_string(src_size) + "\n";
+  // 计算偏移量
+  get_str += "  mul  " + index_reg + ", " + index_reg + ", " + src_size_reg + "\n";
+  // 计算getelemptr结果
+  get_str += "  add  " + src_reg + ", " + src_reg + ", " + index_reg + "\n";
+  // 将结果保存到栈帧
+  stack_place[value] = unused_tag;
+  get_str += DealSwOrder(src_reg, unused_tag);
+  unused_tag += CountStackSpace(value->ty);
   return get_str;
 }
 
@@ -1350,6 +1442,7 @@ string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, cons
   string get_str = "";
   switch (type->tag)
   {
+  case KOOPA_RTT_POINTER: // 指针类型和整数类型字节数量是一样的
   case KOOPA_RTT_INT32:
     if (rank < ceiling) {
       // 生成指令
@@ -1361,15 +1454,16 @@ string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, cons
     else {
       // 生成指令
       int offset = func_size + (rank - ceiling) * data_size;
-      get_str += "  lw   " + registers[0] + ", " + to_string(offset) + "(sp)\n";
-      get_str += "  sw   " + registers[0] + ", " + to_string(unused_tag) + "(sp)\n";
+      get_str += DealLwOrder(registers[0], offset);
+      get_str += DealSwOrder(registers[0], unused_tag);
       // 压入栈帧
       stack_place[value] = unused_tag;
       unused_tag += data_size;
     }
     break;
   default:
-    break;
+    cout << "unknown param type: " << type->tag << "\n";
+    assert(false);
   }
   return get_str;
 }
