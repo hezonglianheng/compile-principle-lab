@@ -791,6 +791,8 @@ string Visit(const koopa_raw_store_t store) {
       get_str += DealLwOrder(registers[register_counter], value_place);
     }
     break;
+  case KOOPA_RVT_GET_PTR:
+  case KOOPA_RVT_GET_ELEM_PTR:
   case KOOPA_RVT_CALL:
     // call指令操作和alloc, load相仿
     if (stack_place.find(store.value)==stack_place.end()) {
@@ -973,6 +975,8 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
           // get_str += "  sw   " + registers[0] + ", " + param_place + "\n";
         }
         break;
+      case KOOPA_RVT_GET_ELEM_PTR:
+      case KOOPA_RVT_GET_PTR: // 两种指针和二元运算场合相仿
       case KOOPA_RVT_CALL:
         /* 函数调用的场合与二元运算场合相仿 */
         if (i < ceiling) {
@@ -992,6 +996,8 @@ string Visit(const koopa_raw_call_t call, const koopa_raw_value_t &value) {
         }
         break;
       default:
+        cout << "unknown param kind: " << value_ptr->kind.tag << "\n";
+        assert(false);
         break;
       }
       break;
@@ -1443,10 +1449,29 @@ string DealFuncParams(const koopa_raw_type_t type, int func_size, int rank, cons
   switch (type->tag)
   {
   case KOOPA_RTT_POINTER: // 指针类型和整数类型字节数量是一样的
+    if (rank < ceiling) {
+      // 生成指令
+      get_str += DealSwOrder(params_registers[rank], unused_tag);
+      // get_str += "  sw   " + params_registers[rank] + ", " + to_string(unused_tag) + "(sp)\n";
+      // 压入栈帧
+      stack_place[value] = unused_tag;
+      unused_tag += data_size;
+    }
+    else {
+      // 生成指令
+      int offset = func_size + (rank - ceiling) * data_size;
+      get_str += DealLwOrder(registers[0], offset);
+      get_str += DealSwOrder(registers[0], unused_tag);
+      // 压入栈帧
+      stack_place[value] = unused_tag;
+      unused_tag += data_size;
+    }
+    break;
   case KOOPA_RTT_INT32:
     if (rank < ceiling) {
       // 生成指令
-      get_str += "  sw   " + params_registers[rank] + ", " + to_string(unused_tag) + "(sp)\n";
+      get_str += DealSwOrder(params_registers[rank], unused_tag);
+      // get_str += "  sw   " + params_registers[rank] + ", " + to_string(unused_tag) + "(sp)\n";
       // 压入栈帧
       stack_place[value] = unused_tag;
       unused_tag += data_size;
